@@ -211,6 +211,8 @@ body {
     font-size: 12px;
     color: var(--log-text);
     line-height: 1.6;
+    user-select: text;
+    cursor: text;
 }
 .log-empty {
     color: var(--text-secondary);

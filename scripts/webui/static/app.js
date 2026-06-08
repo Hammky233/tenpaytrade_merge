@@ -30,6 +30,25 @@ function mockApi(method, ...args) {
     }
 }
 
+// ========== 工具函数 ==========
+
+async function copyLogsToClipboard(logs) {
+    const text = logs.join("\n");
+    try {
+        await navigator.clipboard.writeText(text);
+    } catch {
+        // fallback: 创建临时 textarea
+        const ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+    }
+}
+
 // ========== 组件 ==========
 
 // --- 单批次清洗 Tab ---
@@ -144,7 +163,12 @@ function BatchTab() {
             {/* 日志 */}
             {status.logs && status.logs.length > 0 && (
                 <div className="card">
-                    <div className="card-title">📋 处理日志</div>
+                    <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12}}>
+                        <span className="card-title" style={{marginBottom: 0}}>📋 处理日志</span>
+                        <button className="btn btn-sm btn-secondary" onClick={() => copyLogsToClipboard(status.logs)}>
+                            📋 复制
+                        </button>
+                    </div>
                     <div className="log-panel">
                         {status.logs.map((log, i) => (
                             <div key={i}>{log}</div>
@@ -259,7 +283,12 @@ function MergeTab() {
             {/* 进度与日志 */}
             {status.logs && status.logs.length > 0 && (
                 <div className="card">
-                    <div className="card-title">📋 合并进度</div>
+                    <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12}}>
+                        <span className="card-title" style={{marginBottom: 0}}>📋 合并进度</span>
+                        <button className="btn btn-sm btn-secondary" onClick={() => copyLogsToClipboard(status.logs)}>
+                            📋 复制
+                        </button>
+                    </div>
                     <div className="log-panel">
                         {status.logs.map((log, i) => (
                             <div key={i}>{log}</div>

@@ -213,9 +213,16 @@ def split_datetime(df: pd.DataFrame) -> pd.DataFrame:
     if split_parts.shape[1] > 1:
         time_part = split_parts[1].str.strip()
 
-    # 尝试格式化日期
+    # 尝试格式化日期（月/日不补零，如 2026/4/2）
     try:
-        date_formatted = pd.to_datetime(date_part, errors='coerce').dt.strftime('%Y/%m/%d')
+        def _fmt_date(dt):
+            """将 Timestamp 格式化为 年/月/日（无前导零）"""
+            if pd.isna(dt):
+                return dt
+            return f"{dt.year}/{dt.month}/{dt.day}"
+
+        date_parsed = pd.to_datetime(date_part, errors='coerce')
+        date_formatted = date_parsed.apply(_fmt_date)
         date_formatted = date_formatted.fillna(date_part)
     except Exception:
         date_formatted = date_part
@@ -288,6 +295,13 @@ def calc_income_expense(df: pd.DataFrame) -> pd.DataFrame:
 
     df.loc[is_income, '进账金额'] = amount_numeric[is_income]
     df.loc[is_expense, '出账金额'] = amount_numeric[is_expense]
+
+    # 将进账金额/出账金额插入到交易金额(元)列紧左边
+    if col_amount and col_amount in df.columns:
+        cols = [c for c in df.columns if c not in ('进账金额', '出账金额')]
+        insert_pos = cols.index(col_amount)
+        cols = cols[:insert_pos] + ['进账金额', '出账金额'] + cols[insert_pos:]
+        df = df[cols]
 
     logger.debug("进账/出账金额拆分完成")
     return df

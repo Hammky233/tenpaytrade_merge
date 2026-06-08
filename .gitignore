@@ -13,6 +13,7 @@ __pycache__/
 src_ref/
 
 # 输出目录
+output/
 scripts/output/
 
 # IDE

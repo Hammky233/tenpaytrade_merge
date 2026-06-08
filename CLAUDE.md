@@ -51,15 +51,27 @@ scripts/
 - `find_column(cols, ['交易', '金额', '分'])` 匹配"交易金额(分)"
 - `find_column(cols, ['交易', '用途', '类型'])` 匹配"交易用途类型"
 
-新列插入使用语义锚点而非固定索引：`split_datetime` 用「交易用途类型」作为锚点将日期/时间插入其后。
+同时存在 `find_columns_containing(columns, keywords)` 用于查找所有匹配列。
+
+**语义锚点定位**：新列插入不依赖固定索引。规则：
+- 日期/时间 → 插入「交易用途类型」之后
+- 进账金额/出账金额 → 插入「交易金额(元)」紧左边
+
+### 清洗流水线
+
+`process_dataframe()` 依次执行：列名清洗 → 合并重复列 → 金额分转元（含余额列） → 拆日期/时间（去前导零，`2026/4/2` 格式） → 拆分进账/出账金额。
 
 ### 去重策略
 
 联合主键 **交易单号 + 大单号**。若某个字段覆盖率 < 50% 则降级为单字段，两个都不足则全列去重。
 
+### Excel 输出格式化
+
+`writer.py` 中 `HIDDEN_COLUMN_KEYWORDS` 定义默认隐藏的列（交易单号、大单号、借贷类型、银行卡号等敏感/冗余字段），`FIXED_WIDTH_COLUMNS` 定义固定列宽的列（用户ID=7、对手方ID=7 等）。通过关键词匹配自适应识别，不硬编码列名。
+
 ### 前端零外部依赖
 
-React/Babel 的 `.js` 文件存放在 `webui/static/` 本地（通过 npm 安装后复制），不依赖 CDN（jsdelivr 在国内被墙）。
+React/Babel 的 `.js` 文件存放在 `webui/static/` 本地（通过 npm 安装后复制），不依赖 CDN（jsdelivr 在国内被墙）。日志面板支持"复制日志"按钮（`navigator.clipboard.writeText` + fallback `execCommand`）。
 
 ### 多批次合并
 
