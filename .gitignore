@@ -9,6 +9,9 @@ __pycache__/
 *.pyc
 *.pyo
 
+# 示例/参考数据（不跟踪）
+src_ref/
+
 # 输出目录
 scripts/output/
 
