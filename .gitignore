@@ -1,0 +1,25 @@
+# 虚拟环境
+.venv/
+
+# npm
+node_modules/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 输出目录
+scripts/output/
+
+# IDE
+.vscode/
+.idea/
+
+# 日志
+*.log
+
+# 临时文件
+*.tmp
+.DS_Store
+Thumbs.db

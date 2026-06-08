@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""
+财付通交易流水处理工具 v4.0 — 多批次合并入口
+
+将多次清洗产生的 Excel 文件合并为一个，并去重。
+
+用法:
+    python app_merge.py --input batch1.xlsx batch2.xlsx ... --output merged.xlsx
+
+示例:
+    python app_merge.py -i ./output/batch_0605.xlsx ./output/batch_0607.xlsx -o ./output/merged.xlsx
+"""
+
+import sys
+import os
+import argparse
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import pandas as pd
+
+from utils.logger import setup_logger
+from core.merger import merge_dataframes, deduplicate
+from core.writer import write_excel
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="财付通交易流水处理工具 v4.0 — 多批次合并",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例:
+  python app_merge.py -i batch_0605.xlsx batch_0607.xlsx -o merged.xlsx
+        """,
+    )
+    parser.add_argument(
+        "-i", "--input",
+        nargs="+",
+        required=True,
+        help="待合并的 Excel 文件列表（至少2个）",
+    )
+    parser.add_argument(
+        "-o", "--output",
+        required=True,
+        help="输出文件路径（.xlsx）",
+    )
+
+    args = parser.parse_args()
+
+    if len(args.input) < 1:
+        print("❌ 至少需要1个输入文件")
+        sys.exit(1)
+
+    # 验证输入文件
+    for f in args.input:
+        if not os.path.isfile(f):
+            print(f"❌ 文件不存在: {f}")
+            sys.exit(1)
+
+    # 初始化日志
+    log_dir = os.path.dirname(args.output) or "."
+    logger = setup_logger(log_dir=log_dir)
+
+    logger.info("=" * 60)
+    logger.info("财付通交易流水处理工具 v4.0（多批次合并）")
+    logger.info(f"输入文件: {len(args.input)} 个")
+    for i, f in enumerate(args.input, 1):
+        logger.info(f"  [{i}] {f}")
+    logger.info(f"输出: {args.output}")
+    logger.info("=" * 60)
+
+    start = time.time()
+
+    # 1. 读取所有文件
+    dfs = []
+    for filepath in args.input:
+        logger.info(f"读取: {os.path.basename(filepath)}")
+        try:
+            df = pd.read_excel(filepath, dtype=str)
+            dfs.append(df)
+            logger.info(f"  → {len(df)} 行, {len(df.columns)} 列")
+        except Exception as e:
+            logger.error(f"读取失败: {filepath} - {e}")
+            sys.exit(1)
+
+    # 2. 合并
+    logger.info("合并中...")
+    merged = merge_dataframes(dfs)
+    before = len(merged)
+    logger.info(f"合并后: {before} 行")
+
+    # 3. 去重
+    merged = deduplicate(merged)
+    after = len(merged)
+
+    # 4. 输出
+    write_excel(merged, args.output)
+
+    elapsed = time.time() - start
+
+    print()
+    print("=" * 60)
+    print("合并完成!")
+    print(f"  合并前总计: {before} 行")
+    print(f"  去重移除:   {before - after} 行")
+    print(f"  合并后总计: {after} 行")
+    print(f"  输出文件:   {args.output}")
+    print(f"  耗时:       {elapsed:.1f} 秒")
+    print("=" * 60)
+
+
+if __name__ == "__main__":
+    main()
