@@ -311,6 +311,256 @@ function MergeTab() {
     );
 }
 
+// --- 停车配置 Tab ---
+function ParkingConfigTab() {
+    const [config, setConfig] = useState(null);
+    const [newInclude, setNewInclude] = useState("");
+    const [newExclude, setNewExclude] = useState("");
+    const [newOpponent, setNewOpponent] = useState("");
+    const [saveMsg, setSaveMsg] = useState("");
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        loadConfig();
+    }, []);
+
+    async function loadConfig() {
+        setLoading(true);
+        const cfg = await callApi('get_parking_config');
+        if (cfg && !cfg.error) {
+            setConfig(cfg);
+        } else {
+            setSaveMsg("加载配置失败: " + (cfg?.error || "未知错误"));
+        }
+        setLoading(false);
+    }
+
+    function addKeyword(group, value) {
+        const v = value.trim();
+        if (!v) return;
+        if (config[group].includes(v)) return;  // 不重复添加
+        setConfig(prev => ({
+            ...prev,
+            [group]: [...prev[group], v]
+        }));
+        setSaveMsg("");
+    }
+
+    function removeKeyword(group, index) {
+        setConfig(prev => ({
+            ...prev,
+            [group]: prev[group].filter((_, i) => i !== index)
+        }));
+        setSaveMsg("");
+    }
+
+    async function handleSave() {
+        setSaveMsg("");
+        const result = await callApi('save_parking_config', config);
+        if (result === "ok") {
+            setSaveMsg("✅ 配置已保存");
+            setTimeout(() => setSaveMsg(""), 3000);
+        } else {
+            setSaveMsg("❌ " + result);
+        }
+    }
+
+    if (loading) {
+        return <div className="card"><div style={{textAlign:"center", padding:40, color:"var(--text-secondary)"}}>加载中...</div></div>;
+    }
+
+    if (!config) {
+        return <div className="card"><div style={{textAlign:"center", padding:40, color:"var(--danger)"}}>{saveMsg || "加载配置失败"}</div></div>;
+    }
+
+    const includeKw = config["备注2关键词"] || [];
+    const excludeKw = config["排除关键词"] || [];
+    const opponentKw = config["对手侧账户名称关键词"] || [];
+
+    return (
+        <div>
+            {/* 筛选逻辑流程图 */}
+            <div className="card">
+                <div className="card-title">📐 停车缴费识别逻辑</div>
+                <div className="logic-flow">
+                    <div className="flow-row">
+                        <span style={{fontWeight:600}}>📝 备注2 / 备注1</span>
+                        <span style={{color:"var(--text-secondary)"}}>文本内容</span>
+                    </div>
+                    <div className="flow-indent">
+                        <div className="flow-row">
+                            <span className="flow-arrow">↓</span>
+                            <span>包含任一 </span>
+                            <span className="flow-label flow-label-include">包含关键词</span>
+                        </div>
+                        <div className="flow-row">
+                            <span className="flow-arrow">↓</span>
+                            <span>不包含任一 </span>
+                            <span className="flow-label flow-label-exclude">排除关键词</span>
+                        </div>
+                    </div>
+                    <div className="flow-row">
+                        <span className="flow-arrow" style={{marginLeft:20}}>→</span>
+                        <span className="flow-result">识别为停车缴费</span>
+                        <span style={{color:"var(--text-secondary)"}}>──┐</span>
+                    </div>
+                    <div className="flow-branch">
+                        <div className="flow-row">
+                            <span style={{fontWeight:600}}>🏦 对手侧账户名称</span>
+                            <span style={{color:"var(--text-secondary)"}}>文本内容</span>
+                        </div>
+                        <div className="flow-indent">
+                            <div className="flow-row">
+                                <span className="flow-arrow">↓</span>
+                                <span>包含任一 </span>
+                                <span className="flow-label flow-label-opponent">对手侧关键词</span>
+                            </div>
+                        </div>
+                        <div className="flow-row">
+                            <span className="flow-arrow" style={{marginLeft:20}}>→</span>
+                            <span className="flow-result">识别为停车缴费</span>
+                            <span style={{color:"var(--text-secondary)"}}>──┘</span>
+                        </div>
+                    </div>
+                    <div style={{borderTop:"1px solid var(--border)", margin:"10px 0"}}></div>
+                    <div className="flow-row">
+                        <span className="flow-arrow">↓</span>
+                        <span>合并去重 → 提取车牌号</span>
+                    </div>
+                    <div className="flow-indent">
+                        <div className="flow-row">
+                            <span>车牌提取失败 + 备注含省份简称 → </span>
+                            <span className="flow-label flow-label-yellow">🟡 整行标黄</span>
+                            <span style={{color:"var(--text-secondary)", fontSize:12}}>（人工复核）</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* 包含关键词 */}
+            <div className="card">
+                <div className="card-title">
+                    <span className="flow-label flow-label-include" style={{marginRight:8}}>包含</span>
+                    备注2/备注1 包含关键词
+                    <span style={{fontSize:12, color:"var(--text-secondary)", fontWeight:400, marginLeft:8}}>
+                        备注中包含任一关键词即识别为停车缴费候选
+                    </span>
+                </div>
+                <div className="keyword-tags">
+                    {includeKw.length === 0 ? (
+                        <span className="keyword-empty">暂无关键词</span>
+                    ) : (
+                        includeKw.map((kw, i) => (
+                            <span className="keyword-tag" key={i}>
+                                {kw}
+                                <span className="tag-remove" onClick={() => removeKeyword("备注2关键词", i)}>×</span>
+                            </span>
+                        ))
+                    )}
+                </div>
+                <div className="keyword-input-row">
+                    <input
+                        className="form-input"
+                        value={newInclude}
+                        onChange={e => setNewInclude(e.target.value)}
+                        onKeyDown={e => { if (e.key === "Enter") { addKeyword("备注2关键词", newInclude); setNewInclude(""); } }}
+                        placeholder="输入新关键词，回车添加"
+                    />
+                    <button className="btn btn-primary btn-sm" onClick={() => { addKeyword("备注2关键词", newInclude); setNewInclude(""); }}>
+                        + 添加
+                    </button>
+                </div>
+            </div>
+
+            {/* 排除关键词 */}
+            <div className="card">
+                <div className="card-title">
+                    <span className="flow-label flow-label-exclude" style={{marginRight:8}}>排除</span>
+                    备注2/备注1 排除关键词
+                    <span style={{fontSize:12, color:"var(--text-secondary)", fontWeight:400, marginLeft:8}}>
+                        备注中包含任一排除关键词则跳过（即使命中了包含关键词）
+                    </span>
+                </div>
+                <div className="keyword-tags">
+                    {excludeKw.length === 0 ? (
+                        <span className="keyword-empty">暂无排除关键词（不过滤）</span>
+                    ) : (
+                        excludeKw.map((kw, i) => (
+                            <span className="keyword-tag" key={i}>
+                                {kw}
+                                <span className="tag-remove" onClick={() => removeKeyword("排除关键词", i)}>×</span>
+                            </span>
+                        ))
+                    )}
+                </div>
+                <div className="keyword-input-row">
+                    <input
+                        className="form-input"
+                        value={newExclude}
+                        onChange={e => setNewExclude(e.target.value)}
+                        onKeyDown={e => { if (e.key === "Enter") { addKeyword("排除关键词", newExclude); setNewExclude(""); } }}
+                        placeholder="输入要排除的关键词，回车添加"
+                    />
+                    <button className="btn btn-primary btn-sm" onClick={() => { addKeyword("排除关键词", newExclude); setNewExclude(""); }}>
+                        + 添加
+                    </button>
+                </div>
+            </div>
+
+            {/* 对手侧关键词 */}
+            <div className="card">
+                <div className="card-title">
+                    <span className="flow-label flow-label-opponent" style={{marginRight:8}}>对手侧</span>
+                    对手侧账户名称 关键词
+                    <span style={{fontSize:12, color:"var(--text-secondary)", fontWeight:400, marginLeft:8}}>
+                        对手侧账户名称包含任一关键词即识别为停车缴费
+                    </span>
+                </div>
+                <div className="keyword-tags">
+                    {opponentKw.length === 0 ? (
+                        <span className="keyword-empty">暂无关键词</span>
+                    ) : (
+                        opponentKw.map((kw, i) => (
+                            <span className="keyword-tag" key={i}>
+                                {kw}
+                                <span className="tag-remove" onClick={() => removeKeyword("对手侧账户名称关键词", i)}>×</span>
+                            </span>
+                        ))
+                    )}
+                </div>
+                <div className="keyword-input-row">
+                    <input
+                        className="form-input"
+                        value={newOpponent}
+                        onChange={e => setNewOpponent(e.target.value)}
+                        onKeyDown={e => { if (e.key === "Enter") { addKeyword("对手侧账户名称关键词", newOpponent); setNewOpponent(""); } }}
+                        placeholder="输入对手侧关键词，回车添加"
+                    />
+                    <button className="btn btn-primary btn-sm" onClick={() => { addKeyword("对手侧账户名称关键词", newOpponent); setNewOpponent(""); }}>
+                        + 添加
+                    </button>
+                </div>
+            </div>
+
+            {/* 保存 */}
+            <div style={{textAlign: "center", marginBottom: 16}}>
+                <button className="btn btn-primary btn-lg" onClick={handleSave}>
+                    💾 保存配置
+                </button>
+                {saveMsg && (
+                    <div style={{
+                        marginTop: 8,
+                        fontSize: 13,
+                        color: saveMsg.startsWith("✅") ? "var(--success)" : "var(--danger)"
+                    }}>
+                        {saveMsg}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
 // ========== 根组件 ==========
 function App() {
     const [activeTab, setActiveTab] = useState("batch");
@@ -328,9 +578,12 @@ function App() {
                 <div className={`tab ${activeTab === "merge" ? "active" : ""}`} onClick={() => setActiveTab("merge")}>
                     多批次合并
                 </div>
+                <div className={`tab ${activeTab === "parking" ? "active" : ""}`} onClick={() => setActiveTab("parking")}>
+                    ⚙️ 停车配置
+                </div>
             </div>
             <div className="main">
-                {activeTab === "batch" ? <BatchTab /> : <MergeTab />}
+                {activeTab === "batch" ? <BatchTab /> : activeTab === "merge" ? <MergeTab /> : <ParkingConfigTab />}
             </div>
         </>
     );

@@ -42,7 +42,7 @@ scripts/
 ├── service/pipeline.py         # 管道编排：遍历→读取→清洗→合并→去重→停车识别→输出
 ├── utils/logger.py             # 日志（控制台 ANSI 颜色 + 文件）
 └── webui/
-    ├── bridge.py               # Python → JS API（pywebview bridge）
+    ├── bridge.py               # Python → JS API（文件选择、批处理、合并、停车配置读写）
     └── static/                 # React 前端（本地 JS，无 CDN 依赖）
 ```
 
@@ -96,7 +96,7 @@ React/Babel 的 `.js` 文件存放在 `webui/static/` 本地（通过 npm 安装
 
 如果备注中有停车关键词但无省份简称（说明备注本身就没写车牌号），则不标黄。
 
-**配置**：`scripts/config/parking_config.json`，用户可自由增减关键词、排除词、车牌省份简称。
+**配置**：`scripts/config/parking_config.json`，可通过 GUI「⚙️ 停车配置」Tab 直观增删关键词（含筛选逻辑流程图），也可直接编辑 JSON 文件。
 
 **输出**：Excel 新增「停车缴费」工作表，格式与汇总表一致（隐藏列、固定列宽、冻结表头）。内部辅助列 `_备注含省份简称` 自动隐藏。
 

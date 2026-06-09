@@ -262,6 +262,109 @@ body {
 }
 .file-add:hover { background: #eff6ff; }
 
+/* 关键词标签 */
+.keyword-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+    min-height: 28px;
+}
+.keyword-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    background: #eff6ff;
+    border: 1px solid #bfdbfe;
+    border-radius: 14px;
+    font-size: 12px;
+    color: var(--primary);
+    white-space: nowrap;
+}
+.keyword-tag .tag-remove {
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    color: #94a3b8;
+    transition: color 0.15s;
+}
+.keyword-tag .tag-remove:hover {
+    color: var(--danger);
+}
+.keyword-empty {
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-style: italic;
+    padding: 4px 0;
+}
+.keyword-input-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+.keyword-input-row .form-input {
+    flex: 1;
+    font-size: 12px;
+    padding: 6px 10px;
+}
+
+/* 筛选逻辑流程图 */
+.logic-flow {
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    font-size: 13px;
+    line-height: 2;
+}
+.logic-flow .flow-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+}
+.logic-flow .flow-arrow {
+    color: var(--primary);
+    font-weight: bold;
+    margin: 0 4px;
+}
+.logic-flow .flow-indent {
+    margin-left: 20px;
+}
+.logic-flow .flow-branch {
+    border-left: 2px solid var(--border);
+    padding-left: 16px;
+    margin: 4px 0;
+}
+.logic-flow .flow-result {
+    color: var(--success);
+    font-weight: 600;
+}
+.logic-flow .flow-label {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+}
+.flow-label-include {
+    background: #dcfce7;
+    color: #16a34a;
+}
+.flow-label-exclude {
+    background: #fef2f2;
+    color: #dc2626;
+}
+.flow-label-opponent {
+    background: #fef9c3;
+    color: #ca8a04;
+}
+.flow-label-yellow {
+    background: #fef9c3;
+    color: #a16207;
+}
+
 /* 滚动条 */
 ::-webkit-scrollbar { width: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

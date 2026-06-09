@@ -184,3 +184,36 @@ class Api:
             self._pipeline.progress.status = "idle"
             return "stopped"
         return "no task running"
+
+    def get_parking_config(self) -> dict:
+        """获取停车缴费识别配置"""
+        from core.parking import load_parking_config
+        try:
+            return load_parking_config()
+        except Exception as e:
+            return {"error": str(e)}
+
+    def save_parking_config(self, config: dict) -> str:
+        """保存停车缴费识别配置到 JSON 文件，返回 "ok" 或错误信息"""
+        import json
+
+        # 验证必填字段
+        required_fields = ["备注2关键词", "排除关键词", "对手侧账户名称关键词", "车牌省份简称"]
+        for field in required_fields:
+            if field not in config:
+                return f"缺少必填字段: {field}"
+            if not isinstance(config[field], list):
+                return f"字段 {field} 必须是数组"
+
+        try:
+            # 获取配置文件路径
+            config_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "config", "parking_config.json"
+            )
+            # 保留只读字段（如车牌省份简称，通常不需要 GUI 编辑）
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+            return "ok"
+        except Exception as e:
+            return f"保存失败: {e}"
