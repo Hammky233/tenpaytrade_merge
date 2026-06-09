@@ -94,8 +94,23 @@ def main():
     merged = deduplicate(merged)
     after = len(merged)
 
+    # 3.5 停车缴费识别
+    parking_df = None
+    try:
+        from core.parking import load_parking_config, detect_parking_records, add_license_plate_column
+
+        config = load_parking_config()
+        parking_df = detect_parking_records(merged, config)
+        if not parking_df.empty:
+            parking_df = add_license_plate_column(parking_df, config['车牌省份简称'])
+            logger.info(f"停车缴费记录: {len(parking_df)} 条")
+        else:
+            logger.info("未识别到停车缴费记录")
+    except Exception as e:
+        logger.warning(f"停车缴费识别失败: {e}")
+
     # 4. 输出
-    write_excel(merged, args.output)
+    write_excel(merged, args.output, parking_df=parking_df)
 
     elapsed = time.time() - start
 
@@ -105,6 +120,8 @@ def main():
     print(f"  合并前总计: {before} 行")
     print(f"  去重移除:   {before - after} 行")
     print(f"  合并后总计: {after} 行")
+    if parking_df is not None:
+        print(f"  停车缴费:   {len(parking_df)} 条")
     print(f"  输出文件:   {args.output}")
     print(f"  耗时:       {elapsed:.1f} 秒")
     print("=" * 60)

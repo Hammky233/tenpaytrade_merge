@@ -134,7 +134,22 @@ class Api:
                 merged = deduplicate(merged)
                 after = len(merged)
 
-                write_excel(merged, output)
+                # 停车缴费识别
+                parking_df = None
+                try:
+                    from core.parking import load_parking_config, detect_parking_records, add_license_plate_column
+
+                    config = load_parking_config()
+                    parking_df = detect_parking_records(merged, config)
+                    if not parking_df.empty:
+                        parking_df = add_license_plate_column(parking_df, config['车牌省份简称'])
+                        progress.add_log(f"🅿️ 识别到 {len(parking_df)} 条停车缴费记录")
+                    else:
+                        progress.add_log("未识别到停车缴费记录")
+                except Exception as e:
+                    progress.add_log(f"⚠️ 停车缴费识别失败: {e}")
+
+                write_excel(merged, output, parking_df=parking_df)
 
                 progress.status = "done"
                 progress.add_log(f"✅ 合并完成!")

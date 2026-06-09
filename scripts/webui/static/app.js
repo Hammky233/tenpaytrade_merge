@@ -184,6 +184,7 @@ function BatchTab() {
 function MergeTab() {
     const [inputFiles, setInputFiles] = useState([]);  // [{path, rows, cols, filename}]
     const [output, setOutput] = useState("");
+    const [outputName, setOutputName] = useState("merged.xlsx");
     const [status, setStatus] = useState({ status: "idle", logs: [] });
     const [running, setRunning] = useState(false);
     const timerRef = useRef(null);
@@ -217,18 +218,18 @@ function MergeTab() {
     };
 
     const handleSelectOutput = async () => {
-        const path = await callApi('select_file', "Excel files (*.xlsx)|*.xlsx");
-        if (!path) return;
-        // 确保以 .xlsx 结尾
-        setOutput(path.endsWith('.xlsx') ? path : path + '.xlsx');
+        const path = await callApi('select_folder');
+        if (path) setOutput(path);
     };
 
     const handleStart = async () => {
         if (inputFiles.length === 0 || !output) return;
+        const outputPath = outputName.endsWith('.xlsx') ? outputName : outputName + '.xlsx';
+        const fullOutput = output + '\\' + outputPath;
         const filesStr = inputFiles.map(f => f.path).join("|");
         setRunning(true);
         setStatus({ status: "running", total: 0, current: 0, success: 0, fail: 0, skipped: 0, logs: [], result: {} });
-        const result = await callApi('start_merge_process', filesStr, output);
+        const result = await callApi('start_merge_process', filesStr, fullOutput);
         if (result !== "started") {
             setStatus(s => ({ ...s, status: "error", logs: [...s.logs, `❌ ${result}`] }));
             setRunning(false);
@@ -268,9 +269,19 @@ function MergeTab() {
             <div className="card">
                 <div className="card-title">💾 输出设置</div>
                 <div className="form-row">
-                    <span className="form-label">输出文件</span>
-                    <input className="form-input" value={output} readOnly placeholder="选择输出位置..." />
+                    <span className="form-label">输出文件夹</span>
+                    <input className="form-input" value={output} readOnly placeholder="点击右侧按钮选择..." />
                     <button className="btn btn-secondary" onClick={handleSelectOutput} disabled={running}>选择</button>
+                </div>
+                <div className="form-row">
+                    <span className="form-label">输出文件名</span>
+                    <input
+                        className="form-input"
+                        value={outputName}
+                        onChange={e => setOutputName(e.target.value)}
+                        disabled={running}
+                        placeholder="merged.xlsx"
+                    />
                 </div>
                 <div style={{textAlign: "center", marginTop: 12}}>
                     <button className="btn btn-primary btn-lg" onClick={handleStart}

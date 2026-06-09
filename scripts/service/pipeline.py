@@ -167,9 +167,25 @@ class TenpayPipeline:
 
         merged = deduplicate(merged)
 
+        # 4.5 停车缴费识别（去重后进行）
+        parking_df = None
+        try:
+            from core.parking import load_parking_config, detect_parking_records, add_license_plate_column
+
+            config = load_parking_config()
+            parking_df = detect_parking_records(merged, config)
+            if not parking_df.empty:
+                parking_df = add_license_plate_column(parking_df, config['车牌省份简称'])
+                self.progress.add_log(f"🅿️ 识别到 {len(parking_df)} 条停车缴费记录")
+            else:
+                self.progress.add_log("未识别到停车缴费记录")
+        except Exception as e:
+            self.progress.add_log(f"⚠️ 停车缴费识别失败: {e}")
+            logger.warning(f"停车缴费识别异常: {e}", exc_info=True)
+
         # 5. 输出
         output_path = os.path.join(self.output_dir, self.output_name)
-        write_excel(merged, output_path)
+        write_excel(merged, output_path, parking_df=parking_df)
 
         elapsed = time.time() - start_time
         self.progress.status = "done"
@@ -185,6 +201,7 @@ class TenpayPipeline:
             "skipped": self.progress.skipped,
             "rows": len(merged),
             "elapsed": round(elapsed, 1),
+            "parking_rows": len(parking_df) if parking_df is not None else 0,
         }
 
         logger.info(f"管道完成: {self.progress.result}")

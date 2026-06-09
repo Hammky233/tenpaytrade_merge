@@ -6,9 +6,13 @@ import logging
 import os
 import pandas as pd
 from datetime import datetime
+from openpyxl.styles import PatternFill
 from .processor import find_column
 
 logger = logging.getLogger("TenpayMerge")
+
+# 黄色填充（用于标记不确定的行）
+YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
 
 # 默认隐藏的列（关键词匹配，所有关键词必须同时出现）
 HIDDEN_COLUMN_KEYWORDS = [
@@ -40,14 +44,77 @@ FIXED_WIDTH_COLUMNS = {
 }
 
 
-def write_excel(df: pd.DataFrame, output_path: str, sheet_name: str = "财付通交易汇总") -> str:
+def _format_worksheet(worksheet, df: pd.DataFrame, mark_yellow_col: str | None = None):
+    """
+    对工作表应用统一格式：列宽自适应、固定列宽、隐藏列、冻结表头、可选的黄色标记。
+
+    Args:
+        worksheet: openpyxl Worksheet 对象
+        df: 对应的 DataFrame
+        mark_yellow_col: 如果提供，该列值为"无"的行整行标黄
+    """
+    # 调整列宽（自适应）
+    for column in worksheet.columns:
+        max_length = 0
+        column_letter = column[0].column_letter
+        for cell in column:
+            try:
+                val = str(cell.value) if cell.value is not None else ''
+                # 中文字符按2个字符宽度计算
+                char_len = sum(2 if '一' <= c <= '鿿' or '　' <= c <= '〿' else 1 for c in val)
+                if char_len > max_length:
+                    max_length = char_len
+            except Exception:
+                pass
+        adjusted_width = min(max_length + 2, 60)
+        worksheet.column_dimensions[column_letter].width = max(adjusted_width, 8)
+
+    # 应用固定列宽（覆盖自适应结果）
+    for col_idx, col_name in enumerate(df.columns, 1):
+        column_letter = worksheet.cell(row=1, column=col_idx).column_letter
+        col_str = str(col_name)
+        for keywords, width in FIXED_WIDTH_COLUMNS.items():
+            if all(k in col_str for k in keywords):
+                worksheet.column_dimensions[column_letter].width = width
+                break
+
+    # 隐藏指定列
+    for col_idx, col_name in enumerate(df.columns, 1):
+        column_letter = worksheet.cell(row=1, column=col_idx).column_letter
+        col_str = str(col_name)
+        for keywords in HIDDEN_COLUMN_KEYWORDS:
+            if all(k in col_str for k in keywords):
+                worksheet.column_dimensions[column_letter].hidden = True
+                break
+
+    # 冻结表头行
+    worksheet.freeze_panes = 'A2'
+
+    # 黄色标记：指定列值为"无"的行
+    if mark_yellow_col and mark_yellow_col in df.columns:
+        # 找到该列的索引
+        col_idx = list(df.columns).index(mark_yellow_col) + 1  # 1-based
+        for row_idx in range(2, worksheet.max_row + 1):  # 跳过表头
+            cell = worksheet.cell(row=row_idx, column=col_idx)
+            if str(cell.value).strip() == "无":
+                for c in range(1, worksheet.max_column + 1):
+                    worksheet.cell(row=row_idx, column=c).fill = YELLOW_FILL
+
+
+def write_excel(
+    df: pd.DataFrame,
+    output_path: str,
+    sheet_name: str = "财付通交易汇总",
+    parking_df: pd.DataFrame | None = None,
+) -> str:
     """
     将 DataFrame 写入 Excel 文件，自动调整列宽。
 
     Args:
-        df: 待输出的 DataFrame
+        df: 待输出的主 DataFrame
         output_path: 输出文件路径（含 .xlsx 扩展名）
-        sheet_name: 工作表名称
+        sheet_name: 主工作表名称
+        parking_df: 可选的停车缴费 DataFrame，写入独立工作表
 
     Returns:
         输出文件路径
@@ -65,44 +132,17 @@ def write_excel(df: pd.DataFrame, output_path: str, sheet_name: str = "财付通
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             # 写入主数据表
             df.to_excel(writer, index=False, sheet_name=sheet_name)
+            main_ws = writer.sheets[sheet_name]
+            _format_worksheet(main_ws, df)
 
-            # 调整列宽
-            worksheet = writer.sheets[sheet_name]
-            for column in worksheet.columns:
-                max_length = 0
-                column_letter = column[0].column_letter
-                for cell in column:
-                    try:
-                        val = str(cell.value) if cell.value is not None else ''
-                        # 中文字符按2个字符宽度计算
-                        char_len = sum(2 if '一' <= c <= '鿿' or '　' <= c <= '〿' else 1 for c in val)
-                        if char_len > max_length:
-                            max_length = char_len
-                    except Exception:
-                        pass
-                adjusted_width = min(max_length + 2, 60)
-                worksheet.column_dimensions[column_letter].width = max(adjusted_width, 8)
-
-            # 应用固定列宽（覆盖自适应结果）
-            for col_idx, col_name in enumerate(df.columns, 1):
-                column_letter = worksheet.cell(row=1, column=col_idx).column_letter
-                col_str = str(col_name)
-                for keywords, width in FIXED_WIDTH_COLUMNS.items():
-                    if all(k in col_str for k in keywords):
-                        worksheet.column_dimensions[column_letter].width = width
-                        break
-
-            # 隐藏指定列
-            for col_idx, col_name in enumerate(df.columns, 1):
-                column_letter = worksheet.cell(row=1, column=col_idx).column_letter
-                col_str = str(col_name)
-                for keywords in HIDDEN_COLUMN_KEYWORDS:
-                    if all(k in col_str for k in keywords):
-                        worksheet.column_dimensions[column_letter].hidden = True
-                        break
-
-            # 冻结表头行
-            worksheet.freeze_panes = 'A2'
+            # 写入停车缴费工作表
+            if parking_df is not None and not parking_df.empty:
+                parking_sheet_name = "停车缴费"
+                parking_df.to_excel(writer, index=False, sheet_name=parking_sheet_name)
+                parking_ws = writer.sheets[parking_sheet_name]
+                # 对"车牌"列为"无"的行标黄
+                _format_worksheet(parking_ws, parking_df, mark_yellow_col="车牌")
+                logger.info(f"停车缴费工作表已输出: {len(parking_df)} 条记录")
 
         logger.info(f"Excel 输出完成: {output_path}")
         return output_path
