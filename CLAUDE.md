@@ -162,6 +162,7 @@ React/Babel 的 `.js` 文件存放在 `webui/static/` 本地（通过 npm 安装
 
 - 虚拟环境 `.venv` 在项目根目录，VS Code 不会自动选中，需 `Ctrl+Shift+P → Python: Select Interpreter` 手动选择
 - 每次 Claude Code 的 Shell 调用都是全新会话，不会自动激活 venv。给 venv 装包用绝对路径：`& ".\.venv\Scripts\pip.exe" install <pkg>`
+- 首次部署安装依赖：`& ".\.venv\Scripts\pip.exe" install -r requirements.txt`
 - 仅处理 `.txt` 文件，忽略 `.xlsx`（src_ref 中的 xlsx 是旧脚本的二次产物，非原始数据）
 - `scripts/Tenpay_merge_v2.0.py` 是原始单文件脚本，保留作为参考
-- 日期分类依赖 `chinesecalendar` 库，安装：`& ".\.venv\Scripts\pip.exe" install chinesecalendar`
+- `requirements.txt` 位于项目根目录，记录所有直接依赖
