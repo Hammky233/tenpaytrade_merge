@@ -49,6 +49,19 @@ async function copyLogsToClipboard(logs) {
     }
 }
 
+/** 将 HH:MM 字符串转为分钟数，失败返回 -1。自动归一化中英文冒号 */
+function parseTime(timeStr) {
+    if (!timeStr || typeof timeStr !== "string") return -1;
+    // 归一化冒号：全角（中文输入法）→ 半角
+    const cleaned = timeStr.trim().replace(/：/g, ":");
+    const parts = cleaned.split(":");
+    if (parts.length < 2) return -1;
+    const h = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10);
+    if (isNaN(h) || isNaN(m)) return -1;
+    return h * 60 + m;
+}
+
 // ========== 组件 ==========
 
 // --- 单批次清洗 Tab ---
@@ -326,11 +339,15 @@ function ParkingConfigTab() {
 
     async function loadConfig() {
         setLoading(true);
-        const cfg = await callApi('get_parking_config');
-        if (cfg && !cfg.error) {
-            setConfig(cfg);
-        } else {
-            setSaveMsg("加载配置失败: " + (cfg?.error || "未知错误"));
+        try {
+            const cfg = await callApi('get_parking_config');
+            if (cfg && !cfg.error) {
+                setConfig(cfg);
+            } else {
+                setSaveMsg("加载配置失败: " + (cfg?.error || "未知错误"));
+            }
+        } catch (e) {
+            setSaveMsg("加载配置失败: " + (e.message || e));
         }
         setLoading(false);
     }
@@ -561,6 +578,242 @@ function ParkingConfigTab() {
     );
 }
 
+// --- 时段配置 Tab ---
+function TimePeriodTab() {
+    const [config, setConfig] = useState(null);
+    const [periods, setPeriods] = useState([]);
+    const [saveMsg, setSaveMsg] = useState("");
+    const [loading, setLoading] = useState(true);
+    const [newName, setNewName] = useState("");
+    const [newStart, setNewStart] = useState("");
+    const [newEnd, setNewEnd] = useState("");
+
+    useEffect(() => {
+        loadConfig();
+    }, []);
+
+    async function loadConfig() {
+        setLoading(true);
+        try {
+            const cfg = await callApi('get_time_period_config');
+            if (cfg && !cfg.error) {
+                setConfig(cfg);
+                setPeriods(cfg["时段"] ? cfg["时段"].map((p, i) => ({ ...p, _id: i })) : []);
+            } else {
+                setSaveMsg("加载配置失败: " + (cfg?.error || "未知错误"));
+            }
+        } catch (e) {
+            setSaveMsg("加载配置失败: " + (e.message || e));
+        }
+        setLoading(false);
+    }
+
+    /** 归一化时间字符串中的冒号（全角 → 半角） */
+    function normColon(value) {
+        return value.replace(/：/g, ":");
+    }
+
+    function updatePeriod(index, field, value) {
+        // 时间字段自动归一化冒号
+        const normalized = (field === "start" || field === "end") ? normColon(value) : value;
+        setPeriods(prev => prev.map((p, i) => i === index ? { ...p, [field]: normalized } : p));
+        setSaveMsg("");
+    }
+
+    function removePeriod(index) {
+        setPeriods(prev => prev.filter((_, i) => i !== index));
+        setSaveMsg("");
+    }
+
+    function addPeriod() {
+        const name = newName.trim();
+        // 归一化冒号
+        const start = normColon(newStart.trim());
+        const end = normColon(newEnd.trim());
+        if (!name || !start || !end) return;
+        // 验证时间格式 HH:MM（半角冒号）
+        const timeRe = /^\d{1,2}:\d{2}$/;
+        if (!timeRe.test(start) || !timeRe.test(end)) {
+            setSaveMsg("❌ 时间格式应为 HH:MM（如 06:00）");
+            return;
+        }
+        // 验证开始 < 结束
+        const startMin = parseTime(start);
+        const endMin = parseTime(end);
+        if (startMin < 0 || endMin < 0 || startMin >= endMin) {
+            setSaveMsg("❌ 开始时间必须小于结束时间");
+            return;
+        }
+        setPeriods(prev => [...prev, { name, start, end, _id: Date.now() }]);
+        setNewName("");
+        setNewStart("");
+        setNewEnd("");
+        setSaveMsg("");
+    }
+
+    async function handleSave() {
+        setSaveMsg("");
+        const toSave = {
+            "时段": periods.map(({ name, start, end }) => ({ name, start, end }))
+        };
+        const result = await callApi('save_time_period_config', toSave);
+        if (result === "ok") {
+            setConfig(toSave);
+            setSaveMsg("✅ 配置已保存");
+            setTimeout(() => setSaveMsg(""), 3000);
+        } else {
+            setSaveMsg("❌ " + result);
+        }
+    }
+
+    if (loading) {
+        return <div className="card"><div style={{textAlign:"center", padding:40, color:"var(--text-secondary)"}}>加载中...</div></div>;
+    }
+
+    return (
+        <div>
+            {/* 分类逻辑流程图 */}
+            <div className="card">
+                <div className="card-title">📐 时间分类逻辑</div>
+                <div className="logic-flow">
+                    <div className="flow-row">
+                        <span style={{fontWeight:600}}>⏰ 时间列</span>
+                        <span style={{color:"var(--text-secondary)"}}>（HH:MM / HH:MM:SS 格式）</span>
+                    </div>
+                    <div className="flow-indent">
+                        <div className="flow-row">
+                            <span className="flow-arrow">↓</span>
+                            <span>解析为分钟数（0 ~ 1439）</span>
+                        </div>
+                        <div className="flow-row">
+                            <span className="flow-arrow">↓</span>
+                            <span>按配置顺序依次匹配时段</span>
+                        </div>
+                        <div className="flow-row">
+                            <span className="flow-arrow">↓</span>
+                            <span>start ≤ 分钟数 &lt; end → 命中</span>
+                        </div>
+                    </div>
+                    <div className="flow-row">
+                        <span className="flow-arrow" style={{marginLeft:20}}>→</span>
+                        <span className="flow-result">写入「时段」列</span>
+                        <span style={{color:"var(--text-secondary)", fontSize:12}}>（明细表最右侧，备注2 之后）</span>
+                    </div>
+                    <div style={{borderTop:"1px solid var(--border)", margin:"10px 0"}}></div>
+                    <div className="flow-row">
+                        <span style={{color:"var(--text-secondary)"}}>未命中任何时段 → </span>
+                        <span className="flow-label flow-label-exclude">未知</span>
+                    </div>
+                </div>
+            </div>
+
+            {/* 时段列表编辑 */}
+            <div className="card">
+                <div className="card-title">
+                    ⏰ 时段配置
+                    <span style={{fontSize:12, color:"var(--text-secondary)", fontWeight:400, marginLeft:8}}>
+                        按数组顺序匹配（第一个命中即返回）
+                    </span>
+                </div>
+
+                {periods.length === 0 ? (
+                    <div style={{padding: 20, textAlign: "center", color: "var(--text-secondary)", fontSize: 13}}>
+                        暂无时段配置，请添加
+                    </div>
+                ) : (
+                    <div style={{marginBottom: 12}}>
+                        {/* 表头 */}
+                        <div className="time-period-row time-period-header">
+                            <span style={{flex: 1, fontSize: 12, color: "var(--text-secondary)", fontWeight: 500}}>时段名称</span>
+                            <span style={{width: 80, fontSize: 12, color: "var(--text-secondary)", fontWeight: 500, textAlign: "center"}}>开始</span>
+                            <span style={{width: 30, textAlign: "center", color: "var(--text-secondary)"}}>~</span>
+                            <span style={{width: 80, fontSize: 12, color: "var(--text-secondary)", fontWeight: 500, textAlign: "center"}}>结束</span>
+                            <span style={{width: 50}}></span>
+                        </div>
+                        {periods.map((p, i) => (
+                            <div className="time-period-row" key={p._id}>
+                                <input
+                                    className="form-input"
+                                    style={{flex: 1}}
+                                    value={p.name}
+                                    onChange={e => updatePeriod(i, "name", e.target.value)}
+                                    placeholder="时段名称"
+                                />
+                                <input
+                                    className="form-input time-input"
+                                    value={p.start}
+                                    onChange={e => updatePeriod(i, "start", e.target.value)}
+                                    placeholder="HH:MM"
+                                />
+                                <span style={{width: 30, textAlign: "center", color: "var(--text-secondary)"}}>~</span>
+                                <input
+                                    className="form-input time-input"
+                                    value={p.end}
+                                    onChange={e => updatePeriod(i, "end", e.target.value)}
+                                    placeholder="HH:MM"
+                                />
+                                <button
+                                    className="btn btn-danger"
+                                    style={{width: 50}}
+                                    onClick={() => removePeriod(i)}
+                                    title="删除此时段"
+                                >×</button>
+                            </div>
+                        ))}
+                    </div>
+                )}
+
+                {/* 添加新时段 */}
+                <div style={{borderTop: "1px solid var(--border)", paddingTop: 12}}>
+                    <div style={{fontSize: 12, color: "var(--text-secondary)", marginBottom: 8}}>+ 添加新时段</div>
+                    <div className="time-period-row">
+                        <input
+                            className="form-input"
+                            style={{flex: 1}}
+                            value={newName}
+                            onChange={e => setNewName(e.target.value)}
+                            onKeyDown={e => { if (e.key === "Enter") addPeriod(); }}
+                            placeholder="时段名称"
+                        />
+                        <input
+                            className="form-input time-input"
+                            value={newStart}
+                            onChange={e => setNewStart(normColon(e.target.value))}
+                            placeholder="HH:MM"
+                        />
+                        <span style={{width: 30, textAlign: "center", color: "var(--text-secondary)"}}>~</span>
+                        <input
+                            className="form-input time-input"
+                            value={newEnd}
+                            onChange={e => setNewEnd(normColon(e.target.value))}
+                            placeholder="HH:MM"
+                        />
+                        <button className="btn btn-primary btn-sm" style={{width: 50}} onClick={addPeriod}>
+                            + 添加
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            {/* 保存 */}
+            <div style={{textAlign: "center", marginBottom: 16}}>
+                <button className="btn btn-primary btn-lg" onClick={handleSave}>
+                    💾 保存配置
+                </button>
+                {saveMsg && (
+                    <div style={{
+                        marginTop: 8,
+                        fontSize: 13,
+                        color: saveMsg.startsWith("✅") ? "var(--success)" : "var(--danger)"
+                    }}>
+                        {saveMsg}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
 // ========== 根组件 ==========
 function App() {
     const [activeTab, setActiveTab] = useState("batch");
@@ -581,9 +834,15 @@ function App() {
                 <div className={`tab ${activeTab === "parking" ? "active" : ""}`} onClick={() => setActiveTab("parking")}>
                     ⚙️ 停车配置
                 </div>
+                <div className={`tab ${activeTab === "timeperiod" ? "active" : ""}`} onClick={() => setActiveTab("timeperiod")}>
+                    ⏰ 时段配置
+                </div>
             </div>
             <div className="main">
-                {activeTab === "batch" ? <BatchTab /> : activeTab === "merge" ? <MergeTab /> : <ParkingConfigTab />}
+                {activeTab === "batch" ? <BatchTab />
+                 : activeTab === "merge" ? <MergeTab />
+                 : activeTab === "parking" ? <ParkingConfigTab />
+                 : <TimePeriodTab />}
             </div>
         </>
     );

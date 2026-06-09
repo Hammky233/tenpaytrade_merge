@@ -9,6 +9,8 @@
   calc_income_expense(df)        → 根据借贷类型拆分进账金额/出账金额
 """
 
+import os
+import json
 import logging
 import re
 import pandas as pd
@@ -308,6 +310,133 @@ def calc_income_expense(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ============================================================================
+# 时段分类
+# ============================================================================
+
+def load_time_period_config(config_path: str | None = None) -> dict:
+    """
+    加载时段配置文件。
+
+    Args:
+        config_path: 配置文件路径，默认 scripts/config/time_period_config.json
+
+    Returns:
+        配置字典，包含"时段"列表
+    """
+    if config_path is None:
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "config", "time_period_config.json"
+        )
+
+    if not os.path.exists(config_path):
+        logger.warning(f"时段配置不存在: {config_path}，使用默认配置")
+        return {
+            "时段": [
+                {"name": "凌晨", "start": "00:00", "end": "06:00"},
+                {"name": "早上", "start": "06:00", "end": "12:00"},
+                {"name": "下午", "start": "12:00", "end": "19:00"},
+                {"name": "晚上", "start": "19:00", "end": "24:00"},
+            ],
+        }
+
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    logger.debug(f"时段配置已加载: {config_path}")
+    return config
+
+
+def _time_to_minutes(time_str: str) -> int:
+    """
+    将时间字符串 (HH:MM 或 HH:MM:SS) 转为分钟数。
+
+    Args:
+        time_str: 时间字符串
+
+    Returns:
+        分钟数 (0~1439)，解析失败返回 -1
+    """
+    if pd.isna(time_str) or not isinstance(time_str, str):
+        return -1
+    try:
+        # 归一化冒号：全角冒号（中文输入法）→ 半角冒号
+        cleaned = str(time_str).strip().replace('：', ':')
+        parts = cleaned.split(':')
+        if len(parts) < 2:
+            return -1
+        h, m = int(parts[0]), int(parts[1])
+        return h * 60 + m
+    except (ValueError, IndexError):
+        return -1
+
+
+def classify_time_period(df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
+    """
+    根据"时间"列将交易分类到对应时段，新增"时段"列在最右侧。
+
+    匹配规则：
+    - 遍历 config["时段"] 数组，按顺序匹配
+    - start ≤ 分钟数 < end 则命中（start 包含，end 不包含）
+    - 未命中任何时段 → "未知"
+    - 时间列不存在或已存在"时段"列 → 跳过
+
+    Args:
+        df: 输入 DataFrame
+        config: 时段配置字典，None 时自动加载
+
+    Returns:
+        添加了"时段"列的 DataFrame
+    """
+    # 幂等：已有时段列则跳过
+    if "时段" in df.columns:
+        logger.debug("「时段」列已存在，跳过分类")
+        return df
+
+    col_time = find_column(df.columns, ['时间'])
+    if not col_time:
+        logger.warning("未找到「时间」列，跳过时段分类")
+        return df
+
+    if config is None:
+        config = load_time_period_config()
+
+    periods = config.get("时段", [])
+    if not periods:
+        logger.warning("时段配置为空，跳过分类")
+        return df
+
+    # 预计算每个时段的分钟范围
+    period_ranges = []
+    for p in periods:
+        start_min = _time_to_minutes(p.get("start", ""))
+        end_min = _time_to_minutes(p.get("end", ""))
+        # 处理 24:00 → 1440 分钟，用于 < 比较
+        if p.get("end", "") == "24:00":
+            end_min = 1440
+        period_ranges.append((p.get("name", "未知"), start_min, end_min))
+
+    def _classify(time_val):
+        """对单个时间值进行分类"""
+        minutes = _time_to_minutes(time_val)
+        if minutes < 0:
+            return "未知"
+        for name, start_min, end_min in period_ranges:
+            if start_min >= 0 and end_min >= 0:
+                if start_min <= minutes < end_min:
+                    return name
+        return "未知"
+
+    df = df.copy()
+    df['时段'] = df[col_time].apply(_classify)
+
+    # 统计各类别数量
+    counts = df['时段'].value_counts().to_dict()
+    logger.info(f"时段分类完成: {counts}")
+
+    return df
+
+
+# ============================================================================
 # 主处理入口
 # ============================================================================
 
@@ -351,6 +480,9 @@ def process_dataframe(df: pd.DataFrame) -> pd.DataFrame | None:
 
         # 6. 进账/出账拆分
         df = calc_income_expense(df)
+
+        # 7. 时段分类（根据"时间"列归入凌晨/早上/下午/晚上等）
+        df = classify_time_period(df)
 
         return df
 

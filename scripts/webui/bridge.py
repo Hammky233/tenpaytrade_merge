@@ -134,6 +134,17 @@ class Api:
                 merged = deduplicate(merged)
                 after = len(merged)
 
+                # 时段分类
+                try:
+                    from core.processor import classify_time_period, load_time_period_config
+                    tp_config = load_time_period_config()
+                    merged = classify_time_period(merged, tp_config)
+                    if "时段" in merged.columns:
+                        counts = merged["时段"].value_counts().to_dict()
+                        progress.add_log(f"⏰ 时段分类完成: {counts}")
+                except Exception as e:
+                    progress.add_log(f"⚠️ 时段分类失败: {e}")
+
                 # 停车缴费识别
                 parking_df = None
                 try:
@@ -206,12 +217,40 @@ class Api:
                 return f"字段 {field} 必须是数组"
 
         try:
-            # 获取配置文件路径
             config_path = os.path.join(
                 os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                 "config", "parking_config.json"
             )
-            # 保留只读字段（如车牌省份简称，通常不需要 GUI 编辑）
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+            return "ok"
+        except Exception as e:
+            return f"保存失败: {e}"
+
+    def get_time_period_config(self) -> dict:
+        """获取时段分类配置"""
+        from core.processor import load_time_period_config
+        try:
+            return load_time_period_config()
+        except Exception as e:
+            return {"error": str(e)}
+
+    def save_time_period_config(self, config: dict) -> str:
+        """保存时段分类配置到 JSON 文件，返回 "ok" 或错误信息"""
+        import json
+
+        # 验证必填字段
+        if "时段" not in config or not isinstance(config["时段"], list):
+            return "缺少必填字段: 时段"
+        for period in config["时段"]:
+            if not all(k in period for k in ("name", "start", "end")):
+                return "每个时段必须包含 name, start, end"
+
+        try:
+            config_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "config", "time_period_config.json"
+            )
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
             return "ok"
