@@ -191,29 +191,48 @@ def extract_license_plate(text: str, provinces: list[str]) -> str | None:
 
 def add_license_plate_column(df: pd.DataFrame, provinces: list[str]) -> pd.DataFrame:
     """
-    在 DataFrame 最右侧添加"车牌"列。
-    对每行的「备注2」列提取车牌号，无法识别的填"无"。
+    在 DataFrame 最右侧添加"车牌"列和"_备注含省份简称"辅助列。
+
+    车牌提取：优先从「备注2」提取，失败则尝试「备注1」。
+    辅助列：标记备注2/备注1中是否出现省份简称（用于标黄判断）。
 
     Args:
         df: 输入 DataFrame
         provinces: 车牌省份简称列表
 
     Returns:
-        添加了"车牌"列的 DataFrame
+        添加了"车牌"和"_备注含省份简称"列的 DataFrame
     """
     df = df.copy()
 
-    # 用 find_column 自适应找到备注2列
+    # 自适应找到备注列
     col_note2 = find_column(df.columns, ['备注2'])
-    if not col_note2:
-        # fallback: 尝试找"备注"
-        col_note2 = find_column(df.columns, ['备注'])
+    col_note1 = find_column(df.columns, ['备注1'])
 
-    if col_note2:
-        df['车牌'] = df[col_note2].apply(lambda x: extract_license_plate(x, provinces) or "无")
-    else:
-        logger.warning("未找到「备注2」列，车牌提取将全部标记为'无'")
-        df['车牌'] = "无"
+    # 构建省份简称检查正则
+    province_pattern = re.compile(f'[{"".join(provinces)}]')
+
+    def _extract_and_check(row):
+        """返回 (车牌号, 备注是否含省份简称)"""
+        plate = None
+        # 优先从备注2提取
+        if col_note2 and pd.notna(row[col_note2]):
+            plate = extract_license_plate(str(row[col_note2]), provinces)
+        # 备注2未提取到，尝试备注1
+        if not plate and col_note1 and pd.notna(row[col_note1]):
+            plate = extract_license_plate(str(row[col_note1]), provinces)
+
+        # 检查备注2/备注1中是否包含任一省份简称
+        has_province = False
+        for col in [col_note2, col_note1]:
+            if col and pd.notna(row[col]):
+                if province_pattern.search(str(row[col])):
+                    has_province = True
+                    break
+
+        return pd.Series([plate or "无", "是" if has_province else "否"])
+
+    df[['车牌', '_备注含省份简称']] = df.apply(_extract_and_check, axis=1)
 
     logger.info(f"车牌提取完成: {(df['车牌'] != '无').sum()}/{len(df)} 条识别到车牌")
     return df
@@ -264,23 +283,26 @@ def detect_parking_records(df: pd.DataFrame, config: dict) -> pd.DataFrame:
 
     # 自适应识别列名
     col_note2 = find_column(df.columns, ['备注2'])
+    col_note1 = find_column(df.columns, ['备注1'])
     col_opponent = find_column(df.columns, ['对手', '账户', '名称'])
 
     mask_parking = pd.Series(False, index=df.index)
 
-    # 规则1：备注2 匹配
-    if col_note2:
-        mask_include = pd.Series(False, index=df.index)
-        for kw in include_keywords:
-            mask_include = mask_include | df[col_note2].astype(str).str.contains(kw, na=False)
+    # 规则1：备注2 + 备注1 匹配（任一命中即算）
+    note_cols = [c for c in [col_note2, col_note1] if c]
+    if note_cols:
+        for col in note_cols:
+            mask_include = pd.Series(False, index=df.index)
+            for kw in include_keywords:
+                mask_include = mask_include | df[col].astype(str).str.contains(kw, na=False)
 
-        mask_exclude = pd.Series(False, index=df.index)
-        for kw in exclude_keywords:
-            mask_exclude = mask_exclude | df[col_note2].astype(str).str.contains(kw, na=False)
+            mask_exclude = pd.Series(False, index=df.index)
+            for kw in exclude_keywords:
+                mask_exclude = mask_exclude | df[col].astype(str).str.contains(kw, na=False)
 
-        mask_parking = mask_parking | (mask_include & ~mask_exclude)
+            mask_parking = mask_parking | (mask_include & ~mask_exclude)
     else:
-        logger.warning("未找到「备注2」列，跳过备注2匹配")
+        logger.warning("未找到「备注2」或「备注1」列，跳过备注关键词匹配")
 
     # 规则2：对手侧账户名称 匹配
     if col_opponent:
