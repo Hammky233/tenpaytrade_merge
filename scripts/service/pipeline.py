@@ -183,9 +183,24 @@ class TenpayPipeline:
             self.progress.add_log(f"⚠️ 停车缴费识别失败: {e}")
             logger.warning(f"停车缴费识别异常: {e}", exc_info=True)
 
+        # 4.6 特殊交易筛选（情感数字/特殊日期/特殊备注）
+        special_df = None
+        try:
+            from core.special_filter import load_special_filter_config, detect_special_records
+
+            sf_config = load_special_filter_config()
+            special_df = detect_special_records(merged, sf_config)
+            if not special_df.empty:
+                self.progress.add_log(f"💝 识别到 {len(special_df)} 条特殊交易记录")
+            else:
+                self.progress.add_log("未识别到特殊交易记录")
+        except Exception as e:
+            self.progress.add_log(f"⚠️ 特殊交易筛选失败: {e}")
+            logger.warning(f"特殊交易筛选异常: {e}", exc_info=True)
+
         # 5. 输出
         output_path = os.path.join(self.output_dir, self.output_name)
-        write_excel(merged, output_path, parking_df=parking_df)
+        write_excel(merged, output_path, parking_df=parking_df, special_df=special_df)
 
         elapsed = time.time() - start_time
         self.progress.status = "done"

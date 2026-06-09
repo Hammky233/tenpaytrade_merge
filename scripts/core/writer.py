@@ -128,6 +128,7 @@ def write_excel(
     output_path: str,
     sheet_name: str = "财付通交易汇总",
     parking_df: pd.DataFrame | None = None,
+    special_df: pd.DataFrame | None = None,
 ) -> str:
     """
     将 DataFrame 写入 Excel 文件，自动调整列宽。
@@ -136,7 +137,8 @@ def write_excel(
         df: 待输出的主 DataFrame
         output_path: 输出文件路径（含 .xlsx 扩展名）
         sheet_name: 主工作表名称
-        parking_df: 可选的停车缴费 DataFrame，写入独立工作表
+        parking_df: 可选的停车缴费 DataFrame，写入独立工作表「停车缴费」
+        special_df: 可选的特殊交易 DataFrame，写入独立工作表「特殊交易」
 
     Returns:
         输出文件路径
@@ -165,6 +167,14 @@ def write_excel(
                 # 对"车牌"列为"无" 且 备注含省份简称 的行标黄（提示人工复核）
                 _format_worksheet(parking_ws, parking_df, mark_yellow_col="车牌", mark_yellow_condition_col="_备注含省份简称")
                 logger.info(f"停车缴费工作表已输出: {len(parking_df)} 条记录")
+
+            # 写入特殊交易工作表
+            if special_df is not None and not special_df.empty:
+                special_sheet_name = "特殊交易"
+                special_df.to_excel(writer, index=False, sheet_name=special_sheet_name)
+                special_ws = writer.sheets[special_sheet_name]
+                _format_worksheet(special_ws, special_df)
+                logger.info(f"特殊交易工作表已输出: {len(special_df)} 条记录")
 
         logger.info(f"Excel 输出完成: {output_path}")
         return output_path

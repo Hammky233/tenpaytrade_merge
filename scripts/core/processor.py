@@ -7,6 +7,8 @@
   convert_amounts(df)            → 自动识别"金额(分)"列，转为"金额(元)"
   split_datetime(df)             → 拆分"交易时间"列 → 日期 + 时间（插在"交易用途类型"后面）
   calc_income_expense(df)        → 根据借贷类型拆分进账金额/出账金额
+  classify_time_period(df)       → 时段分类（凌晨/早上/下午/晚上）
+  classify_date_type(df)         → 日期分类（工作日/节假日/周末）
 """
 
 import os
@@ -437,12 +439,99 @@ def classify_time_period(df: pd.DataFrame, config: dict | None = None) -> pd.Dat
 
 
 # ============================================================================
+# 日期分类（工作日 / 节假日）
+# ============================================================================
+
+# chinesecalendar 节日名称英→中映射（该库仅返回英文名称）
+_HOLIDAY_NAME_MAP = {
+    "New Year's Day": "元旦",
+    "Spring Festival": "春节",
+    "Tomb-sweeping Day": "清明节",
+    "Labour Day": "劳动节",
+    "Dragon Boat Festival": "端午节",
+    "Mid-autumn Festival": "中秋节",
+    "National Day": "国庆节",
+}
+
+
+def classify_date_type(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    根据"日期"列分类为工作日/节假日/周末，新增"日期分类"列在"时段"右侧。
+
+    节假日判断依赖 chinesecalendar 库；未安装或解析失败返回"未知"。
+
+    ⚡ 性能：对唯一日期做缓存（365个/年），再 map 到全量行，不逐行调用 API。
+
+    Args:
+        df: 输入 DataFrame
+
+    Returns:
+        添加了"日期分类"列的 DataFrame
+    """
+    # 幂等：已有"日期分类"列则跳过
+    if "日期分类" in df.columns:
+        logger.debug("「日期分类」列已存在，跳过分类")
+        return df
+
+    col_date = find_column(df.columns, ['日期'])
+    if not col_date:
+        logger.warning("未找到「日期」列，跳过日期分类")
+        return df
+
+    # 尝试导入 chinesecalendar
+    try:
+        from chinese_calendar import is_holiday, is_workday, get_holiday_detail
+    except ImportError:
+        logger.warning("chinesecalendar 未安装，日期分类全部标记为「未知」")
+        df = df.copy()
+        df['日期分类'] = '未知'
+        return df
+
+    # 提取唯一日期（去空），为每个建立映射缓存
+    date_series = df[col_date].dropna().unique()
+    cache = {}
+
+    for date_val in date_series:
+        try:
+            dt = pd.to_datetime(str(date_val), errors='coerce')
+            if pd.isna(dt):
+                cache[date_val] = '未知'
+                continue
+
+            is_hol, eng_name = get_holiday_detail(dt.date())
+            if is_hol and eng_name:
+                # 有名假期 → 节假日（春节）
+                cn_name = _HOLIDAY_NAME_MAP.get(eng_name, eng_name)
+                cache[date_val] = f'节假日（{cn_name}）'
+            elif is_workday(dt.date()):
+                # 工作日（含调休上班的周末）
+                cache[date_val] = '工作日'
+            else:
+                # 普通周末 或 无名假期
+                cache[date_val] = '周末'
+        except Exception:
+            cache[date_val] = '未知'
+
+    # 向量化映射到全量行
+    df = df.copy()
+    df['日期分类'] = df[col_date].map(cache).fillna('未知')
+
+    # 统计
+    counts = df['日期分类'].value_counts().to_dict()
+    logger.info(f"日期分类完成: {counts}")
+
+    return df
+
+
+# ============================================================================
 # 主处理入口
 # ============================================================================
 
 def process_dataframe(df: pd.DataFrame) -> pd.DataFrame | None:
     """
     对单个 DataFrame 执行完整清洗流水线。
+
+    流程：列名清洗→合并重复列→金额分转元→时间拆分→进账/出账拆分→时段分类→日期分类
 
     Args:
         df: 原始 DataFrame
@@ -483,6 +572,9 @@ def process_dataframe(df: pd.DataFrame) -> pd.DataFrame | None:
 
         # 7. 时段分类（根据"时间"列归入凌晨/早上/下午/晚上等）
         df = classify_time_period(df)
+
+        # 8. 日期分类（根据"日期"列区分工作日/节假日/周末）
+        df = classify_date_type(df)
 
         return df
 

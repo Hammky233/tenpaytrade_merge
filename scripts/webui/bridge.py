@@ -160,7 +160,19 @@ class Api:
                 except Exception as e:
                     progress.add_log(f"⚠️ 停车缴费识别失败: {e}")
 
-                write_excel(merged, output, parking_df=parking_df)
+                # 特殊交易筛选
+                special_df = None
+                try:
+                    from core.special_filter import load_special_filter_config, detect_special_records
+
+                    sf_config = load_special_filter_config()
+                    special_df = detect_special_records(merged, sf_config)
+                    if not special_df.empty:
+                        progress.add_log(f"💝 识别到 {len(special_df)} 条特殊交易记录")
+                except Exception as e:
+                    progress.add_log(f"⚠️ 特殊交易筛选失败: {e}")
+
+                write_excel(merged, output, parking_df=parking_df, special_df=special_df)
 
                 progress.status = "done"
                 progress.add_log(f"✅ 合并完成!")

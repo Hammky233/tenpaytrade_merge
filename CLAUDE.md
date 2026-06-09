@@ -33,17 +33,19 @@ scripts/
 ├── gui_app.py                  # pywebview GUI 入口
 ├── core/
 │   ├── reader.py               # txt 读取，自动编码检测，空文件跳过
-│   ├── processor.py            # 清洗流水线：列名清洗→合并重复列→分转元→时间拆分→进账/出账→时段分类
+│   ├── processor.py            # 清洗流水线：列名清洗→合并重复列→分转元→时间拆分→进账/出账→时段分类→日期分类
 │   ├── merger.py               # 多 DataFrame 合并 + (交易单号+大单号)联合去重
 │   ├── parking.py              # 停车缴费识别 + 车牌提取
-│   └── writer.py               # Excel 输出 + 列宽自适应（支持停车缴费第二 sheet）
+│   ├── special_filter.py       # 特殊交易筛选（情感数字/特殊日期/特殊备注）
+│   └── writer.py               # Excel 输出 + 列宽自适应（支持停车缴费、特殊交易多 sheet）
 ├── config/
-│   ├── parking_config.json      # 停车识别配置（关键词、排除词、车牌省份简称）
-│   └── time_period_config.json  # 时段分类配置（时段名称、起止时间）
-├── service/pipeline.py         # 管道编排：遍历→读取→清洗→合并→去重→停车识别→输出
+│   ├── parking_config.json       # 停车识别配置（关键词、排除词、车牌省份简称）
+│   ├── time_period_config.json   # 时段分类配置（时段名称、起止时间）
+│   └── special_filter_config.json # 特殊交易筛选配置（金额模式、备注关键词、2/14开关）
+├── service/pipeline.py         # 管道编排：遍历→读取→清洗→合并→去重→停车识别→特殊交易筛选→输出
 ├── utils/logger.py             # 日志（控制台 ANSI 颜色 + 文件）
 └── webui/
-    ├── bridge.py               # Python → JS API（文件选择、批处理、合并、停车/时段配置读写）
+    ├── bridge.py               # Python → JS API（文件选择、批处理、合并、停车/时段/特殊交易配置读写）
     └── static/                 # React 前端（本地 JS，无 CDN 依赖）
 ```
 
@@ -63,7 +65,7 @@ scripts/
 
 ### 清洗流水线
 
-`process_dataframe()` 依次执行：列名清洗 → 合并重复列 → 金额分转元（含余额列） → 拆日期/时间（去前导零，`2026/4/2` 格式） → 拆分进账/出账金额 → 时段分类。
+`process_dataframe()` 依次执行：列名清洗 → 合并重复列 → 金额分转元（含余额列） → 拆日期/时间（去前导零，`2026/4/2` 格式） → 拆分进账/出账金额 → 时段分类 → 日期分类。
 
 ### 去重策略
 
@@ -119,9 +121,47 @@ React/Babel 的 `.js` 文件存放在 `webui/static/` 本地（通过 npm 安装
 
 **GUI 管道覆盖**：多批次合并管道（`bridge.py` start_merge_process）去重后同样调用 `classify_time_period()`。
 
+### 日期分类
+
+在时段分类之后，根据"日期"列自动区分工作日/节假日/周末。新增"日期分类"列追加到明细表最右侧（"时段"之后）。
+
+**依赖**：`chinesecalendar` 库（PyPI），提供国务院公布的节假日数据（覆盖 2004~2030 年）。
+
+**分类逻辑**：
+- 调用 `get_holiday_detail(date)` 判断：
+  - `is_holiday=True` 且 `name` 非空 → `节假日（春节）`  # 标注具体节日名称
+  - `is_workday=True` → `工作日`  # 含调休上班的周末
+  - 两者皆否 → `周末`  # 普通周六日
+- `name=None` 的假期（chinesecalendar 将普通周末也标记为 is_holiday）归类为"周末"，不显示为"节假日"。
+- 已存在"日期分类"列时跳过（幂等）
+
+**⚡ 性能**：先对唯一日期（≤365个/年）缓存分类结果，再 map 到全量行，几十万行数据无压力。
+
+**节日名称映射**：chinesecalendar 仅返回英文名称（如 "Spring Festival"），`processor.py` 内置 `_HOLIDAY_NAME_MAP` 做英→中翻译（春节/元旦/清明/劳动节/端午/中秋/国庆）。
+
+### 特殊交易筛选
+
+在去重后自动筛选情感数字、特殊日期、特殊备注记录，输出到独立工作表「特殊交易」。参照停车缴费模块模式（`parking.py`），实现在 `special_filter.py`。
+
+**筛选规则**（OR 关系，满足任一即命中）：
+1. **2月14日**：解析"日期"列，month=2 且 day=14
+2. **交易金额含情感数字**：金额（元）格式化为 2 位小数字符串，检查是否**包含**配置中的金额模式（如 `999` 匹配 `999.99`、`520` 匹配 `520.00`）
+3. **备注2含特殊关键词**：包含任一配置中的备注关键词
+
+**⚡ 性能**：全部使用 pandas 向量化操作（`str.contains`、`pd.to_datetime`），不逐行 apply。
+
+**配置**：`scripts/config/special_filter_config.json`，包含 `金额模式`、`备注关键词`、`启用2月14日` 三个字段，可直接编辑 JSON 调整规则，无需改代码。
+
+**输出**：Excel 新增「特殊交易」工作表，格式与汇总表一致（隐藏列、固定列宽、冻结表头）。空 DataFrame 时不创建该工作表。
+
+**管道覆盖**：
+- `pipeline.py` 单批次管道：去重后 → 停车识别 → 特殊交易筛选 → 输出
+- `bridge.py` 合并管道：去重后 → 时段分类 → 停车识别 → 特殊交易筛选 → 输出
+
 ## 注意事项
 
 - 虚拟环境 `.venv` 在项目根目录，VS Code 不会自动选中，需 `Ctrl+Shift+P → Python: Select Interpreter` 手动选择
 - 每次 Claude Code 的 Shell 调用都是全新会话，不会自动激活 venv。给 venv 装包用绝对路径：`& ".\.venv\Scripts\pip.exe" install <pkg>`
 - 仅处理 `.txt` 文件，忽略 `.xlsx`（src_ref 中的 xlsx 是旧脚本的二次产物，非原始数据）
 - `scripts/Tenpay_merge_v2.0.py` 是原始单文件脚本，保留作为参考
+- 日期分类依赖 `chinesecalendar` 库，安装：`& ".\.venv\Scripts\pip.exe" install chinesecalendar`
