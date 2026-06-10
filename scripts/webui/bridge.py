@@ -5,7 +5,13 @@ pywebview Bridge API — Python 端暴露给前端的方法
 import os
 import sys
 import threading
-from tkinter import filedialog
+
+# tkinter 在部分 Linux 发行版需要单独安装 python3-tk
+try:
+    from tkinter import filedialog
+    _TKINTER_AVAILABLE = True
+except ImportError:
+    _TKINTER_AVAILABLE = False
 
 # 确保项目根目录在 sys.path 中
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -25,6 +31,8 @@ class Api:
 
     def select_folder(self) -> str:
         """打开文件夹选择对话框，返回所选路径（取消返回空字符串）"""
+        if not _TKINTER_AVAILABLE:
+            return self._fallback_dialog_error()
         import tkinter as tk
         root = tk.Tk()
         root.withdraw()
@@ -35,6 +43,8 @@ class Api:
 
     def select_file(self, file_types: str = "Excel files (*.xlsx)|*.xlsx") -> str:
         """打开文件选择对话框，返回所选路径（取消返回空字符串）"""
+        if not _TKINTER_AVAILABLE:
+            return self._fallback_dialog_error()
         import tkinter as tk
         root = tk.Tk()
         root.withdraw()
@@ -48,6 +58,8 @@ class Api:
 
     def select_files(self, file_types: str = "Excel files (*.xlsx)|*.xlsx") -> str:
         """多文件选择，返回用 | 分隔的路径字符串"""
+        if not _TKINTER_AVAILABLE:
+            return self._fallback_dialog_error()
         import tkinter as tk
         root = tk.Tk()
         root.withdraw()
@@ -58,6 +70,14 @@ class Api:
         )
         root.destroy()
         return "|".join(files) if files else ""
+
+    def _fallback_dialog_error(self) -> str:
+        """tkinter 不可用时的错误提示（Linux 需安装 python3-tk）"""
+        import platform
+        msg = "文件对话框不可用：tkinter 未安装"
+        if platform.system() == "Linux":
+            msg += "。请运行: sudo apt install python3-tk (或等效命令)"
+        return f"__ERROR__:{msg}"
 
     def start_batch_process(self, source: str, output: str, output_name: str = "Tenpay_merge.xlsx") -> str:
         """
