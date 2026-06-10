@@ -249,10 +249,8 @@ class Api:
                 return f"字段 {field} 必须是数组"
 
         try:
-            config_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                "config", "parking_config.json"
-            )
+            from utils.paths import get_config_dir
+            config_path = os.path.join(get_config_dir(), "parking_config.json")
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
             return "ok"
@@ -279,10 +277,8 @@ class Api:
                 return "每个时段必须包含 name, start, end"
 
         try:
-            config_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                "config", "time_period_config.json"
-            )
+            from utils.paths import get_config_dir
+            config_path = os.path.join(get_config_dir(), "time_period_config.json")
             with open(config_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
             return "ok"

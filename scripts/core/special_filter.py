@@ -18,14 +18,12 @@ import json
 import logging
 import pandas as pd
 from .processor import find_column
+from utils.paths import get_config_dir
 
 logger = logging.getLogger("TenpayMerge")
 
-# 默认配置路径（相对于项目根目录）
-_DEFAULT_CONFIG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "config", "special_filter_config.json"
-)
+# 默认配置路径（兼容 PyInstaller 打包）
+_DEFAULT_CONFIG_PATH = os.path.join(get_config_dir(), "special_filter_config.json")
 
 
 def load_special_filter_config(config_path: str | None = None) -> dict:

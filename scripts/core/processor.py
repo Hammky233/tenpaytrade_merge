@@ -326,10 +326,8 @@ def load_time_period_config(config_path: str | None = None) -> dict:
         配置字典，包含"时段"列表
     """
     if config_path is None:
-        config_path = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "config", "time_period_config.json"
-        )
+        from utils.paths import get_config_dir
+        config_path = os.path.join(get_config_dir(), "time_period_config.json")
 
     if not os.path.exists(config_path):
         logger.warning(f"时段配置不存在: {config_path}，使用默认配置")
