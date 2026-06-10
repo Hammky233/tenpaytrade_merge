@@ -11,11 +11,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import webview
 from webui.bridge import Api
+from utils.paths import get_scripts_dir
 
 
 def main():
-    # 静态文件目录
-    static_dir = os.path.join(os.path.dirname(__file__), "webui", "static")
+    # 静态文件目录（兼容 PyInstaller 打包）
+    static_dir = os.path.join(get_scripts_dir(), "webui", "static")
     index_html = os.path.join(static_dir, "index.html")
 
     if not os.path.exists(index_html):

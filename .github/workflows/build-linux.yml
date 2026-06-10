@@ -28,13 +28,22 @@ jobs:
           python-version: '3.12'
           cache: 'pip'
 
-      - name: 安装依赖
+      - name: 安装系统依赖（tkinter）
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-tk
+
+      - name: 安装 Python 依赖
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: PyInstaller 构建 — 单批次清洗 (app)
+      # ====================================================================
+      # CLI 工具构建
+      # ====================================================================
+
+      - name: PyInstaller — 单批次清洗 (app)
         run: |
           pyinstaller \
             --onefile \
@@ -46,7 +55,7 @@ jobs:
             --hidden-import=utils.paths \
             scripts/app.py
 
-      - name: PyInstaller 构建 — 多批次合并 (app_merge)
+      - name: PyInstaller — 多批次合并 (app_merge)
         run: |
           pyinstaller \
             --onefile \
@@ -55,6 +64,86 @@ jobs:
             --add-data "scripts/utils:scripts/utils" \
             --hidden-import=utils.paths \
             scripts/app_merge.py
+
+      # ====================================================================
+      # GUI 工具构建
+      # ====================================================================
+
+      - name: PyInstaller — GUI (pywebview)
+        run: |
+          pyinstaller \
+            --onefile \
+            --name tenpaytrade-gui \
+            --paths scripts \
+            --add-data "scripts/config:scripts/config" \
+            --add-data "scripts/utils:scripts/utils" \
+            --add-data "scripts/webui/static:scripts/webui/static" \
+            --hidden-import=chinesecalendar \
+            --hidden-import=utils.paths \
+            --hidden-import=webview \
+            --hidden-import=webview.platforms.cef \
+            --hidden-import=webview.platforms.gtk \
+            --hidden-import=webview.platforms.qt \
+            --hidden-import=tkinter \
+            --hidden-import=json \
+            scripts/gui_app.py
+
+      # ====================================================================
+      # 启动脚本（检查系统依赖 + 启动 GUI）
+      # ====================================================================
+
+      - name: 生成启动脚本
+        run: |
+          cat > dist/启动工具.sh << 'SCRIPTEOF'
+          #!/bin/bash
+          # 财付通交易流水处理工具 — 启动脚本
+          # 自动检查系统依赖，缺失时给出安装提示
+
+          SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+          echo "========================================="
+          echo "  财付通交易流水处理工具 v4.0"
+          echo "========================================="
+          echo ""
+
+          # 检查 GTK3 + WebKit2（GUI 模式需要）
+          check_lib() {
+              local name="$1"
+              local pkg="$2"
+              if ! ldconfig -p 2>/dev/null | grep -q "$name"; then
+                  echo "⚠️  缺少系统库: $name"
+                  echo "   请运行: sudo apt install $pkg"
+                  echo ""
+                  MISSING=1
+              fi
+          }
+
+          MISSING=0
+          check_lib "libgtk-3" "libgtk-3-0"
+          check_lib "libwebkit2gtk-4" "libwebkit2gtk-4.0-37"
+
+          if [ "$MISSING" = "1" ]; then
+              echo "========================================="
+              echo "  一键安装命令（Ubuntu/Debian）："
+              echo "  sudo apt install libgtk-3-0 libwebkit2gtk-4.0-37"
+              echo "========================================="
+              echo ""
+              echo "按回车键退出..."
+              read -r
+              exit 1
+          fi
+
+          echo "✅ 系统依赖检查通过，启动中..."
+          echo ""
+
+          # 启动 GUI
+          exec "$SCRIPT_DIR/tenpaytrade-gui"
+          SCRIPTEOF
+          chmod +x dist/启动工具.sh
+
+      # ====================================================================
+      # 验证
+      # ====================================================================
 
       - name: 验证构建产物
         run: |
@@ -66,6 +155,13 @@ jobs:
           echo ""
           echo "=== 测试 tenpaytrade-merge --help ==="
           ./dist/tenpaytrade-merge --help
+          echo ""
+          echo "=== 测试 tenpaytrade-gui --help（可能因无显示器而报错，忽略）==="
+          ./dist/tenpaytrade-gui --help 2>&1 || echo "(GUI 需要显示器，跳过)"
+
+      # ====================================================================
+      # 上传
+      # ====================================================================
 
       - name: 上传构建产物 (Artifact)
         uses: actions/upload-artifact@v4
@@ -74,6 +170,8 @@ jobs:
           path: |
             dist/tenpaytrade
             dist/tenpaytrade-merge
+            dist/tenpaytrade-gui
+            dist/启动工具.sh
           retention-days: 30
 
       - name: 创建 Release（仅 tag 触发）
@@ -83,4 +181,6 @@ jobs:
           files: |
             dist/tenpaytrade
             dist/tenpaytrade-merge
+            dist/tenpaytrade-gui
+            dist/启动工具.sh
           generate_release_notes: true
