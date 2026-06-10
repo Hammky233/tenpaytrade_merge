@@ -14,7 +14,9 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # 使用 ubuntu-20.04 以确保编译产物兼容 GLIBC 2.31+
+    # （GLIBC 向前兼容：旧版本构建的产物可在新版系统运行，反之不行）
+    runs-on: ubuntu-20.04
 
     steps:
       - name: 检出代码
