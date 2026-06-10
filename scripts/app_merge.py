@@ -23,6 +23,7 @@ import pandas as pd
 from utils.logger import setup_logger
 from core.merger import merge_dataframes, deduplicate
 from core.writer import write_excel
+from service.pipeline import post_merge_analysis
 
 
 def main():
@@ -94,23 +95,13 @@ def main():
     merged = deduplicate(merged)
     after = len(merged)
 
-    # 3.5 停车缴费识别
-    parking_df = None
-    try:
-        from core.parking import load_parking_config, detect_parking_records, add_license_plate_column
-
-        config = load_parking_config()
-        parking_df = detect_parking_records(merged, config)
-        if not parking_df.empty:
-            parking_df = add_license_plate_column(parking_df, config['车牌省份简称'])
-            logger.info(f"停车缴费记录: {len(parking_df)} 条")
-        else:
-            logger.info("未识别到停车缴费记录")
-    except Exception as e:
-        logger.warning(f"停车缴费识别失败: {e}")
+    # 3.5 停车缴费识别 + 特殊交易筛选
+    analysis = post_merge_analysis(merged)
+    parking_df = analysis["parking_df"]
+    special_df = analysis["special_df"]
 
     # 4. 输出
-    write_excel(merged, args.output, parking_df=parking_df)
+    write_excel(merged, args.output, parking_df=parking_df, special_df=special_df)
 
     elapsed = time.time() - start
 

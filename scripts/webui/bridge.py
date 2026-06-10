@@ -16,7 +16,7 @@ except ImportError:
 # 确保项目根目录在 sys.path 中
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from service.pipeline import TenpayPipeline, ProgressInfo
+from service.pipeline import TenpayPipeline, ProgressInfo, post_merge_analysis
 from core.merger import merge_dataframes, deduplicate
 from core.writer import write_excel
 import pandas as pd
@@ -97,7 +97,16 @@ class Api:
         )
 
         def _run():
-            self._pipeline.run()
+            try:
+                self._pipeline.run()
+            except Exception as e:
+                import traceback
+                self._pipeline.progress.status = "error"
+                self._pipeline.progress.add_log(f"❌ 处理异常: {e}")
+                # 将完整堆栈也写入日志，方便排查
+                for line in traceback.format_exc().splitlines():
+                    if line.strip():
+                        self._pipeline.progress.add_log(f"   {line.strip()}")
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
@@ -154,43 +163,10 @@ class Api:
                 merged = deduplicate(merged)
                 after = len(merged)
 
-                # 时段分类
-                try:
-                    from core.processor import classify_time_period, load_time_period_config
-                    tp_config = load_time_period_config()
-                    merged = classify_time_period(merged, tp_config)
-                    if "时段" in merged.columns:
-                        counts = merged["时段"].value_counts().to_dict()
-                        progress.add_log(f"⏰ 时段分类完成: {counts}")
-                except Exception as e:
-                    progress.add_log(f"⚠️ 时段分类失败: {e}")
-
-                # 停车缴费识别
-                parking_df = None
-                try:
-                    from core.parking import load_parking_config, detect_parking_records, add_license_plate_column
-
-                    config = load_parking_config()
-                    parking_df = detect_parking_records(merged, config)
-                    if not parking_df.empty:
-                        parking_df = add_license_plate_column(parking_df, config['车牌省份简称'])
-                        progress.add_log(f"🅿️ 识别到 {len(parking_df)} 条停车缴费记录")
-                    else:
-                        progress.add_log("未识别到停车缴费记录")
-                except Exception as e:
-                    progress.add_log(f"⚠️ 停车缴费识别失败: {e}")
-
-                # 特殊交易筛选
-                special_df = None
-                try:
-                    from core.special_filter import load_special_filter_config, detect_special_records
-
-                    sf_config = load_special_filter_config()
-                    special_df = detect_special_records(merged, sf_config)
-                    if not special_df.empty:
-                        progress.add_log(f"💝 识别到 {len(special_df)} 条特殊交易记录")
-                except Exception as e:
-                    progress.add_log(f"⚠️ 特殊交易筛选失败: {e}")
+                # 停车缴费识别 + 特殊交易筛选（通过共享函数，与 pipeline 行为一致）
+                analysis = post_merge_analysis(merged)
+                parking_df = analysis["parking_df"]
+                special_df = analysis["special_df"]
 
                 write_excel(merged, output, parking_df=parking_df, special_df=special_df)
 
@@ -200,8 +176,12 @@ class Api:
                 progress.result = {"output": output, "rows": after, "removed": before - after}
 
             except Exception as e:
+                import traceback
                 progress.status = "error"
                 progress.add_log(f"❌ 合并失败: {e}")
+                for line in traceback.format_exc().splitlines():
+                    if line.strip():
+                        progress.add_log(f"   {line.strip()}")
 
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()

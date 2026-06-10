@@ -5,9 +5,8 @@ Excel 输出模块
 import logging
 import os
 import pandas as pd
-from datetime import datetime
 from openpyxl.styles import PatternFill
-from .processor import find_column
+from utils.columns import find_column
 
 logger = logging.getLogger("TenpayMerge")
 
@@ -47,8 +46,7 @@ FIXED_WIDTH_COLUMNS = {
 def _format_worksheet(
     worksheet,
     df: pd.DataFrame,
-    mark_yellow_col: str | None = None,
-    mark_yellow_condition_col: str | None = None,
+    yellow_mask = None,
 ):
     """
     对工作表应用统一格式：列宽自适应、固定列宽、隐藏列、冻结表头、可选的黄色标记。
@@ -56,9 +54,7 @@ def _format_worksheet(
     Args:
         worksheet: openpyxl Worksheet 对象
         df: 对应的 DataFrame
-        mark_yellow_col: 如果提供，该列值为"无"的行整行标黄
-        mark_yellow_condition_col: 额外条件列，仅当该列值为"是"时才标黄
-                                   （用于"车牌=无 且 备注含省份简称"的场景）
+        yellow_mask: pd.Series 或 None — True 的行整行标黄（0-based index 对齐 df）
     """
     # 调整列宽（自适应）
     for column in worksheet.columns:
@@ -97,21 +93,12 @@ def _format_worksheet(
     # 冻结表头行
     worksheet.freeze_panes = 'A2'
 
-    # 黄色标记：主标记列值为"无"的行（可选配合条件列）
-    if mark_yellow_col and mark_yellow_col in df.columns:
-        col_idx = list(df.columns).index(mark_yellow_col) + 1  # 1-based
-        cond_col_idx = None
-        if mark_yellow_condition_col and mark_yellow_condition_col in df.columns:
-            cond_col_idx = list(df.columns).index(mark_yellow_condition_col) + 1
-
-        for row_idx in range(2, worksheet.max_row + 1):  # 跳过表头
-            cell = worksheet.cell(row=row_idx, column=col_idx)
-            if str(cell.value).strip() == "无":
-                # 如果有额外条件列，必须同时满足条件列值为"是"
-                if cond_col_idx is not None:
-                    cond_val = str(worksheet.cell(row=row_idx, column=cond_col_idx).value).strip()
-                    if cond_val != "是":
-                        continue
+    # 黄色标记：根据传入的 mask 整行标黄
+    if yellow_mask is not None:
+        yellow_indices = set(yellow_mask[yellow_mask].index)
+        for row_idx in range(2, worksheet.max_row + 1):
+            df_row = row_idx - 2  # Excel 行号 → df index (0-based)
+            if df_row in yellow_indices:
                 for c in range(1, worksheet.max_column + 1):
                     worksheet.cell(row=row_idx, column=c).fill = YELLOW_FILL
 
@@ -164,8 +151,10 @@ def write_excel(
                 parking_sheet_name = "停车缴费"
                 parking_df.to_excel(writer, index=False, sheet_name=parking_sheet_name)
                 parking_ws = writer.sheets[parking_sheet_name]
-                # 对"车牌"列为"无" 且 备注含省份简称 的行标黄（提示人工复核）
-                _format_worksheet(parking_ws, parking_df, mark_yellow_col="车牌", mark_yellow_condition_col="_备注含省份简称")
+                # 构建停车标黄 mask（车牌=无 且 备注含省份简称 → 提示人工复核）
+                from core.parking import build_parking_yellow_mask
+                yellow_mask = build_parking_yellow_mask(parking_df)
+                _format_worksheet(parking_ws, parking_df, yellow_mask=yellow_mask)
                 logger.info(f"停车缴费工作表已输出: {len(parking_df)} 条记录")
 
             # 写入特殊交易工作表

@@ -85,7 +85,6 @@ jobs:
             --hidden-import=webview.platforms.gtk \
             --hidden-import=webview.platforms.qt \
             --hidden-import=tkinter \
-            --hidden-import=json \
             scripts/gui_app.py
 
       # ====================================================================

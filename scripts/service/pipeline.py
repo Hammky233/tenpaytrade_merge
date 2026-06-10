@@ -5,7 +5,6 @@
 import os
 import logging
 import time
-import queue
 from typing import Callable
 
 from core.reader import read_tenpay_trades
@@ -14,6 +13,64 @@ from core.merger import merge_dataframes, deduplicate
 from core.writer import write_excel
 
 logger = logging.getLogger("TenpayMerge")
+
+
+# ============================================================================
+# 后处理分析（pipeline / CLI合并 / GUI合并 共享）
+# ============================================================================
+
+def post_merge_analysis(merged, progress=None) -> dict:
+    """
+    在去重后的 DataFrame 上运行停车识别 + 特殊交易筛选。
+
+    被 pipeline.run()、bridge.py 合并路径、app_merge.py CLI 合并路径共享，
+    确保三条执行路径行为一致。
+
+    Args:
+        merged: 去重后的 DataFrame
+        progress: ProgressInfo 实例（可选），用于 GUI 日志
+
+    Returns:
+        {"parking_df": DataFrame|None, "special_df": DataFrame|None}
+    """
+
+    def _log(msg: str):
+        logger.info(msg)
+        if progress:
+            progress.add_log(msg)
+
+    # --- 停车缴费识别 ---
+    parking_df = None
+    try:
+        from core.parking import load_parking_config, detect_parking_records, add_license_plate_column
+
+        config = load_parking_config()
+        parking_df = detect_parking_records(merged, config)
+        if not parking_df.empty:
+            parking_df = add_license_plate_column(parking_df, config['车牌省份简称'])
+            _log(f"🅿️ 识别到 {len(parking_df)} 条停车缴费记录")
+        else:
+            _log("未识别到停车缴费记录")
+    except Exception as e:
+        logger.warning(f"停车缴费识别异常: {e}", exc_info=True)
+        _log(f"⚠️ 停车缴费识别失败: {e}")
+
+    # --- 特殊交易筛选 ---
+    special_df = None
+    try:
+        from core.special_filter import load_special_filter_config, detect_special_records
+
+        sf_config = load_special_filter_config()
+        special_df = detect_special_records(merged, sf_config)
+        if not special_df.empty:
+            _log(f"💝 识别到 {len(special_df)} 条特殊交易记录")
+        else:
+            _log("未识别到特殊交易记录")
+    except Exception as e:
+        logger.warning(f"特殊交易筛选异常: {e}", exc_info=True)
+        _log(f"⚠️ 特殊交易筛选失败: {e}")
+
+    return {"parking_df": parking_df, "special_df": special_df}
 
 
 class ProgressInfo:
@@ -167,36 +224,10 @@ class TenpayPipeline:
 
         merged = deduplicate(merged)
 
-        # 4.5 停车缴费识别（去重后进行）
-        parking_df = None
-        try:
-            from core.parking import load_parking_config, detect_parking_records, add_license_plate_column
-
-            config = load_parking_config()
-            parking_df = detect_parking_records(merged, config)
-            if not parking_df.empty:
-                parking_df = add_license_plate_column(parking_df, config['车牌省份简称'])
-                self.progress.add_log(f"🅿️ 识别到 {len(parking_df)} 条停车缴费记录")
-            else:
-                self.progress.add_log("未识别到停车缴费记录")
-        except Exception as e:
-            self.progress.add_log(f"⚠️ 停车缴费识别失败: {e}")
-            logger.warning(f"停车缴费识别异常: {e}", exc_info=True)
-
-        # 4.6 特殊交易筛选（情感数字/特殊日期/特殊备注）
-        special_df = None
-        try:
-            from core.special_filter import load_special_filter_config, detect_special_records
-
-            sf_config = load_special_filter_config()
-            special_df = detect_special_records(merged, sf_config)
-            if not special_df.empty:
-                self.progress.add_log(f"💝 识别到 {len(special_df)} 条特殊交易记录")
-            else:
-                self.progress.add_log("未识别到特殊交易记录")
-        except Exception as e:
-            self.progress.add_log(f"⚠️ 特殊交易筛选失败: {e}")
-            logger.warning(f"特殊交易筛选异常: {e}", exc_info=True)
+        # 4.5 停车缴费识别 + 特殊交易筛选（去重后进行）
+        analysis = post_merge_analysis(merged, self.progress)
+        parking_df = analysis["parking_df"]
+        special_df = analysis["special_df"]
 
         # 5. 输出
         output_path = os.path.join(self.output_dir, self.output_name)

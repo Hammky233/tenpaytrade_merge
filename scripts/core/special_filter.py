@@ -17,13 +17,10 @@ import os
 import json
 import logging
 import pandas as pd
-from .processor import find_column
+from utils.columns import find_column
 from utils.paths import get_config_dir
 
 logger = logging.getLogger("TenpayMerge")
-
-# 默认配置路径（兼容 PyInstaller 打包）
-_DEFAULT_CONFIG_PATH = os.path.join(get_config_dir(), "special_filter_config.json")
 
 
 def load_special_filter_config(config_path: str | None = None) -> dict:
@@ -36,9 +33,12 @@ def load_special_filter_config(config_path: str | None = None) -> dict:
     Returns:
         配置字典，包含 金额模式、备注关键词、启用2月14日
     """
-    path = config_path or _DEFAULT_CONFIG_PATH
+    if config_path is not None:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
 
-    default_config = {
+    from utils.config_loader import load_json_config
+    return load_json_config("special_filter_config", {
         "金额模式": [
             "66.66", "88.88", "99.99", "666", "888", "999",
             "520", "5200", "1314", "52.00", "6666", "8888", "9999"
@@ -48,16 +48,7 @@ def load_special_filter_config(config_path: str | None = None) -> dict:
             "加油", "恭喜", "祝", "谢谢"
         ],
         "启用2月14日": True,
-    }
-
-    if not os.path.exists(path):
-        logger.warning(f"特殊交易筛选配置不存在: {path}，使用默认配置")
-        return default_config
-
-    with open(path, "r", encoding="utf-8") as f:
-        config = json.load(f)
-    logger.debug(f"特殊交易筛选配置已加载: {path}")
-    return config
+    })
 
 
 def detect_special_records(df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:

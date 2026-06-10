@@ -13,13 +13,11 @@ import re
 import json
 import logging
 import pandas as pd
-from .processor import find_column
+from utils.columns import find_column
 from utils.paths import get_config_dir
+from utils.clean_text import clean_special_chars
 
 logger = logging.getLogger("TenpayMerge")
-
-# 默认配置路径（兼容 PyInstaller 打包）
-_DEFAULT_CONFIG_PATH = os.path.join(get_config_dir(), "parking_config.json")
 
 
 def load_parking_config(config_path: str | None = None) -> dict:
@@ -32,36 +30,26 @@ def load_parking_config(config_path: str | None = None) -> dict:
     Returns:
         配置字典
     """
-    path = config_path or _DEFAULT_CONFIG_PATH
-    if not os.path.exists(path):
-        logger.warning(f"停车配置不存在: {path}，使用默认配置")
-        return {
-            "备注2关键词": ["停车缴费", "停车费", "停车", "停车场", "临停缴费"],
-            "排除关键词": [],
-            "对手侧账户名称关键词": ["停车"],
-            "车牌省份简称": [
-                "京", "津", "沪", "渝", "冀", "豫", "云", "辽", "黑",
-                "湘", "皖", "鲁", "新", "苏", "浙", "赣", "鄂", "桂", "甘",
-                "晋", "蒙", "陕", "吉", "闽", "贵", "粤", "川", "青", "藏", "琼", "宁",
-            ],
-        }
+    if config_path is not None:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
 
-    with open(path, "r", encoding="utf-8") as f:
-        config = json.load(f)
-    logger.debug(f"停车配置已加载: {path}")
-    return config
+    from utils.config_loader import load_json_config
+    return load_json_config("parking_config", {
+        "备注2关键词": ["停车缴费", "停车费", "停车", "停车场", "临停缴费"],
+        "排除关键词": [],
+        "对手侧账户名称关键词": ["停车"],
+        "车牌省份简称": [
+            "京", "津", "沪", "渝", "冀", "豫", "云", "辽", "黑",
+            "湘", "皖", "鲁", "新", "苏", "浙", "赣", "鄂", "桂", "甘",
+            "晋", "蒙", "陕", "吉", "闽", "贵", "粤", "川", "青", "藏", "琼", "宁",
+        ],
+    })
 
 
 # ============================================================================
 # 车牌提取
 # ============================================================================
-
-def _clean_special_chars(text: str) -> str:
-    """清理特殊 Unicode 控制字符（与 processor.py 保持一致）"""
-    special_chars = ['‌', '‎', '‪', '‬', '‍', '​', '‏']
-    for char in special_chars:
-        text = text.replace(char, '')
-    return text
 
 
 def extract_license_plate(text: str, provinces: list[str]) -> str | None:
@@ -83,7 +71,7 @@ def extract_license_plate(text: str, provinces: list[str]) -> str | None:
         return None
 
     # 清理特殊 Unicode 字符
-    text = _clean_special_chars(text)
+    text = clean_special_chars(text)
     if not text:
         return None
 
@@ -236,25 +224,28 @@ def add_license_plate_column(df: pd.DataFrame, provinces: list[str]) -> pd.DataF
     return df
 
 
+def build_parking_yellow_mask(parking_df: pd.DataFrame):
+    """
+    构建停车缴费工作表的黄色标记 mask。
+
+    标黄条件：车牌 = "无" 且 备注含省份简称 = "是"
+    （说明备注中提到了车牌但正则未能提取，需人工复核）
+
+    Args:
+        parking_df: 停车缴费 DataFrame（已含「车牌」「_备注含省份简称」列）
+
+    Returns:
+        bool pd.Series，True 表示该行需要标黄
+    """
+    mask = pd.Series(False, index=parking_df.index)
+    if "车牌" in parking_df.columns and "_备注含省份简称" in parking_df.columns:
+        mask = (parking_df["车牌"] == "无") & (parking_df["_备注含省份简称"] == "是")
+    return mask
+
+
 # ============================================================================
 # 停车记录识别
 # ============================================================================
-
-def _contains_any(text: str, keywords: list[str]) -> bool:
-    """检查文本是否包含任一关键词"""
-    if pd.isna(text) or not isinstance(text, str):
-        return False
-    for kw in keywords:
-        if kw in text:
-            return True
-    return False
-
-
-def _contains_all(text: str, keywords: list[str]) -> bool:
-    """检查文本是否包含所有关键词"""
-    if pd.isna(text) or not isinstance(text, str):
-        return False
-    return all(kw in text for kw in keywords)
 
 
 def detect_parking_records(df: pd.DataFrame, config: dict) -> pd.DataFrame:

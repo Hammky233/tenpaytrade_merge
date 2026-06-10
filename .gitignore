@@ -23,6 +23,11 @@ scripts/output/
 # 日志
 *.log
 
+# PyInstaller 构建产物
+*.spec
+build/
+dist/
+
 # 临时文件
 *.tmp
 .DS_Store

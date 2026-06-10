@@ -4,7 +4,7 @@
 
 import logging
 import pandas as pd
-from .processor import find_column
+from utils.columns import find_column
 
 logger = logging.getLogger("TenpayMerge")
 

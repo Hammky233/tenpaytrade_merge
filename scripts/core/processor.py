@@ -16,53 +16,10 @@ import json
 import logging
 import re
 import pandas as pd
-import numpy as np
+from utils.columns import find_column, find_columns_containing
+from utils.clean_text import _SPECIAL_CHARS_REGEX as _SC_REGEX
 
 logger = logging.getLogger("TenpayMerge")
-
-
-# ============================================================================
-# 列名工具函数
-# ============================================================================
-
-def find_column(columns, keywords):
-    """
-    精准匹配列名：必须同时包含所有关键词。
-    用于自适应识别腾讯返回的不固定列名。
-
-    Args:
-        columns: 列名列表（pd.Index 或 list）
-        keywords: 关键词列表，所有关键词必须同时出现在列名中
-
-    Returns:
-        匹配到的列名（str）或 None
-    """
-    for col in columns:
-        col_str = str(col)
-        if all(k in col_str for k in keywords):
-            return col_str
-    return None
-
-
-def find_columns_containing(columns, keywords):
-    """
-    查找所有包含指定关键词组合的列。
-    用于查找多个金额列等场景。
-
-    Args:
-        columns: 列名列表
-        keywords: 关键词列表，所有关键词必须同时出现在列名中
-
-    Returns:
-        匹配到的列名列表
-    """
-    result = []
-    for col in columns:
-        col_str = str(col)
-        if all(k in col_str for k in keywords):
-            result.append(col_str)
-    return result
-
 
 # ============================================================================
 # 清洗函数
@@ -81,10 +38,8 @@ def clean_columns(df: pd.DataFrame) -> pd.DataFrame:
     df.columns = df.columns.astype(str)
     df.columns = df.columns.str.strip()
 
-    # 移除常见特殊字符
-    special_chars = ['﻿', '‎', '‪', '‬', '‌', '​', '‍']
-    for char in special_chars:
-        df.columns = df.columns.str.replace(char, '', regex=False)
+    # 移除特殊 Unicode 控制字符（BOM、方向标记、零宽字符等）
+    df.columns = df.columns.str.replace(_SC_REGEX, '', regex=True)
 
     return df
 
@@ -154,7 +109,7 @@ def convert_amounts(df: pd.DataFrame) -> pd.DataFrame:
         try:
             # 先清理数据中的特殊字符（备注列可能混入的）
             df[col] = df[col].astype(str).str.strip()
-            df[col] = df[col].str.replace(r'[‌‎‪‬​‍﻿]', '', regex=True)
+            df[col] = df[col].str.replace(_SC_REGEX, '', regex=True)
             # 转数值并除以100
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0) / 100
             new_name = col.replace('(分)', '(元)')
@@ -208,7 +163,7 @@ def split_datetime(df: pd.DataFrame) -> pd.DataFrame:
     # 解析时间字符串
     time_str = df[col_time].astype(str).str.strip()
     # 移除可能混入的特殊字符
-    time_str = time_str.str.replace(r'[‌‎‪‬﻿]', '', regex=True)
+    time_str = time_str.str.replace(_SC_REGEX, '', regex=True)
 
     split_parts = time_str.str.split(n=1, expand=True)
 
@@ -325,25 +280,19 @@ def load_time_period_config(config_path: str | None = None) -> dict:
     Returns:
         配置字典，包含"时段"列表
     """
-    if config_path is None:
-        from utils.paths import get_config_dir
-        config_path = os.path.join(get_config_dir(), "time_period_config.json")
+    if config_path is not None:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
 
-    if not os.path.exists(config_path):
-        logger.warning(f"时段配置不存在: {config_path}，使用默认配置")
-        return {
-            "时段": [
-                {"name": "凌晨", "start": "00:00", "end": "06:00"},
-                {"name": "早上", "start": "06:00", "end": "12:00"},
-                {"name": "下午", "start": "12:00", "end": "19:00"},
-                {"name": "晚上", "start": "19:00", "end": "24:00"},
-            ],
-        }
-
-    with open(config_path, "r", encoding="utf-8") as f:
-        config = json.load(f)
-    logger.debug(f"时段配置已加载: {config_path}")
-    return config
+    from utils.config_loader import load_json_config
+    return load_json_config("time_period_config", {
+        "时段": [
+            {"name": "凌晨", "start": "00:00", "end": "06:00"},
+            {"name": "早上", "start": "06:00", "end": "12:00"},
+            {"name": "下午", "start": "12:00", "end": "19:00"},
+            {"name": "晚上", "start": "19:00", "end": "24:00"},
+        ],
+    })
 
 
 def _time_to_minutes(time_str: str) -> int:
