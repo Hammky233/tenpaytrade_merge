@@ -6,14 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 批量清洗财付通（Tenpay）交易流水数据。从目录树中读取 `TenpayTrades.txt`（UTF-8 + Tab 分隔），清洗转换后合并输出为一个 Excel 文件，支持多批次合并去重。
 
+此外，支持从目录树中遍历 `TenpayRegInfo.txt`（注册信息）提取账号状态、身份变更历史并合并输出。
+
 ## 常用命令
 
 ```powershell
-# CLI 单批次清洗
+# CLI 单批次清洗（交易流水）
 python scripts/app.py -s <数据源目录> -o <输出目录> [-n 文件名]
 
 # CLI 多批次合并（将多次清洗结果合并去重）
 python scripts/app_merge.py -i batch1.xlsx batch2.xlsx -o merged.xlsx
+
+# CLI 注册信息提取合并
+python scripts/app_reg.py -s <数据源目录> -o <输出目录> [-n 文件名]
 
 # GUI（pywebview + React）
 python scripts/gui_app.py
@@ -23,27 +28,36 @@ python scripts/gui_app.py
 ```powershell
 python scripts/app.py -s src_ref/0062_L-1780366225387 -o output
 python scripts/app_merge.py -i output/batch_0605.xlsx output/batch_0607.xlsx -o output/merged.xlsx
+python scripts/app_reg.py -s src_ref/财付通20260421 -o output
 ```
 
 ## 架构
 
 ```
 scripts/
-├── app.py / app_merge.py       # CLI 入口（单批次 / 多批次合并）
+├── app.py / app_merge.py       # CLI 入口（单批次交易 / 多批次合并）
+├── app_reg.py                  # CLI 入口（注册信息提取合并）
 ├── gui_app.py                  # pywebview GUI 入口
 ├── core/
-│   ├── reader.py               # txt 读取，自动编码检测，空文件跳过
+│   ├── reader.py               # txt 读取（交易流水），自动编码检测，空文件跳过
+│   ├── reg_reader.py           # txt 读取（注册信息），两区域格式 + 银行卡扩展行 + 账号不存在
 │   ├── processor.py            # 清洗流水线：列名清洗→合并重复列→分转元→时间拆分→进账/出账→时段分类→日期分类
+│   ├── reg_processor.py        # 注册信息合并：主记录去重 + 变更记录分类（身份变更/注销）
 │   ├── merger.py               # 多 DataFrame 合并 + (交易单号+大单号)联合去重
 │   ├── parking.py              # 停车缴费识别 + 车牌提取
 │   ├── special_filter.py       # 特殊交易筛选（情感数字/特殊日期/特殊备注）
-│   └── writer.py               # Excel 输出 + 列宽自适应（支持停车缴费、特殊交易多 sheet）
+│   └── writer.py               # Excel 输出 + 列宽自适应（支持停车缴费、特殊交易、注册信息多 sheet）
 ├── config/
 │   ├── parking_config.json       # 停车识别配置（关键词、排除词、车牌省份简称）
 │   ├── time_period_config.json   # 时段分类配置（时段名称、起止时间）
 │   └── special_filter_config.json # 特殊交易筛选配置（金额模式、备注关键词、2/14开关）
 ├── service/pipeline.py         # 管道编排：遍历→读取→清洗→合并→去重→停车识别→特殊交易筛选→输出
-├── utils/logger.py             # 日志（控制台 ANSI 颜色 + 文件）
+├── utils/
+│   ├── columns.py              # 自适应列名识别（find_column / find_columns_containing）
+│   ├── clean_text.py           # 文本清洗工具
+│   ├── config_loader.py        # JSON 配置加载器
+│   ├── paths.py                # 路径工具（兼容 PyInstaller）
+│   └── logger.py               # 日志（控制台 ANSI 颜色 + 文件）
 └── webui/
     ├── bridge.py               # Python → JS API（文件选择、批处理、合并、停车/时段/特殊交易配置读写）
     └── static/                 # React 前端（本地 JS，无 CDN 依赖）
@@ -157,6 +171,30 @@ React/Babel 的 `.js` 文件存放在 `webui/static/` 本地（通过 npm 安装
 **管道覆盖**：
 - `pipeline.py` 单批次管道：去重后 → 停车识别 → 特殊交易筛选 → 输出
 - `bridge.py` 合并管道：去重后 → 时段分类 → 停车识别 → 特殊交易筛选 → 输出
+
+### 注册信息提取合并
+
+`app_reg.py` 独立工具。遍历目录树中所有 `TenpayRegInfo.txt`，提取注册信息（账户状态、账号、姓名、身份证号、绑定手机等），合并去重后输出双 sheet Excel。
+
+**TenpayRegInfo.txt 格式**（UTF-8 + Tab 分隔，两区域）：
+- **区域一（基本信息表）**：表头（9列：账户状态/账号/注册姓名/注册时间/注册身份证号/绑定手机/绑定状态/开户行信息/银行账号）+ 主记录行 + 可选银行卡扩展行（前6列为空）
+- **区域二（注销/变更信息表）**：表头（9列：账号/注册姓名/注册身份证号/注册时间/注销时间/开户行信息/银行账号/绑定时间/解绑时间）+ 历史记录
+
+**账户状态**：
+- `正常`（~81%）：活跃账户，完整信息 + 银行卡记录
+- `已注销`（~8%）：仅状态+账号有值，注销区有注销记录
+- `未注册`（~1%）：标准表头格式，仅状态+账号有值
+- `账号不存在`（~9%）：单行特殊格式 — "账号XXX不存在"
+
+**变更类型识别**：
+- `身份信息变更`：状态=正常 + 注销区有数据 → 旧身份→新身份
+- `账户注销`：状态=已注销 + 注销区有数据 → 注销记录
+
+**输出 Excel**：
+- Sheet「注册信息汇总」：去重后的主记录（按 账号+身份证号 去重），含数据来源和调证编号
+- Sheet「变更记录」：所有变更/注销历史，含变更类型、当前/旧身份对照
+
+**设计约束**：银行账号相关字段（开户行信息、银行账号）不参与合并清洗，直接透传。
 
 ## 注意事项
 

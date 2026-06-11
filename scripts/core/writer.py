@@ -175,3 +175,112 @@ def write_excel(
         df.to_csv(csv_path, index=False, encoding='utf-8-sig')
         logger.info(f"已输出 CSV 备选: {csv_path}")
         return csv_path
+
+
+# ── 注册信息专用隐藏列 ──────────────────────────────────────────────
+
+REG_HIDDEN_COLUMN_KEYWORDS = [
+    ['开户行信息'],
+    ['银行账号'],
+    ['数据来源'],
+    ['调证编号'],
+]
+
+REG_FIXED_WIDTH_COLUMNS = {
+    ('账户状态',): 8,
+    ('账号',): 18,
+    ('注册身份证号',): 20,
+    ('变更类型',): 12,
+    ('当前状态',): 8,
+}
+
+
+def write_reg_excel(
+    basic_df: pd.DataFrame,
+    changes_df: pd.DataFrame,
+    output_path: str,
+    person_df: pd.DataFrame | None = None,
+) -> str:
+    """
+    将注册信息写入 Excel 文件（三 sheet：「注册信息汇总」+「变更记录」+「基础信息」）。
+
+    Args:
+        basic_df: 注册信息汇总 DataFrame
+        changes_df: 变更记录 DataFrame
+        output_path: 输出文件路径（含 .xlsx 扩展名）
+        person_df: 可选的人员基础信息 DataFrame（注册姓名 + 身份证号 + 手机 去重）
+
+    Returns:
+        输出文件路径
+    """
+    if basic_df.empty and changes_df.empty and (person_df is None or person_df.empty):
+        logger.warning("注册信息 DataFrame 为空，不生成输出")
+        return ""
+
+    # 确保输出目录存在
+    out_dir = os.path.dirname(output_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    try:
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+            # ── Sheet 1: 注册信息汇总 ──
+            if not basic_df.empty:
+                basic_df.to_excel(writer, index=False, sheet_name="注册信息汇总")
+                basic_ws = writer.sheets["注册信息汇总"]
+                _format_worksheet(basic_ws, basic_df)
+                _apply_reg_fixed_widths(basic_ws, basic_df)
+                _apply_reg_hidden_columns(basic_ws, basic_df)
+
+            # ── Sheet 2: 变更记录 ──
+            if not changes_df.empty:
+                changes_df.to_excel(writer, index=False, sheet_name="变更记录")
+                changes_ws = writer.sheets["变更记录"]
+                _format_worksheet(changes_ws, changes_df)
+                _apply_reg_fixed_widths(changes_ws, changes_df)
+                _apply_reg_hidden_columns(changes_ws, changes_df)
+
+            # ── Sheet 3: 基础信息（自然人级别去重）──
+            if person_df is not None and not person_df.empty:
+                person_df.to_excel(writer, index=False, sheet_name="基础信息")
+                person_ws = writer.sheets["基础信息"]
+                _format_worksheet(person_ws, person_df)
+                _apply_reg_fixed_widths(person_ws, person_df)
+
+        logger.info(f"注册信息 Excel 输出完成: {output_path}")
+        return output_path
+
+    except Exception as e:
+        logger.error(f"注册信息 Excel 输出失败: {e}")
+        # fallback: 输出 CSV
+        if not basic_df.empty:
+            csv_path = output_path.replace('.xlsx', '_汇总.csv')
+            basic_df.to_csv(csv_path, index=False, encoding='utf-8-sig')
+            logger.info(f"已输出 CSV 备选: {csv_path}")
+        if not changes_df.empty:
+            csv_path = output_path.replace('.xlsx', '_变更.csv')
+            changes_df.to_csv(csv_path, index=False, encoding='utf-8-sig')
+            logger.info(f"已输出 CSV 备选: {csv_path}")
+        return ""
+
+
+def _apply_reg_hidden_columns(worksheet, df: pd.DataFrame):
+    """隐藏注册信息专用敏感/冗余列。"""
+    for col_idx, col_name in enumerate(df.columns, 1):
+        column_letter = worksheet.cell(row=1, column=col_idx).column_letter
+        col_str = str(col_name)
+        for keywords in REG_HIDDEN_COLUMN_KEYWORDS:
+            if all(k in col_str for k in keywords):
+                worksheet.column_dimensions[column_letter].hidden = True
+                break
+
+
+def _apply_reg_fixed_widths(worksheet, df: pd.DataFrame):
+    """覆盖注册信息专用固定列宽。"""
+    for col_idx, col_name in enumerate(df.columns, 1):
+        column_letter = worksheet.cell(row=1, column=col_idx).column_letter
+        col_str = str(col_name)
+        for keywords, width in REG_FIXED_WIDTH_COLUMNS.items():
+            if all(k in col_str for k in keywords):
+                worksheet.column_dimensions[column_letter].width = width
+                break
