@@ -3,9 +3,14 @@
 const { useState, useEffect, useRef, useCallback } = React;
 
 // ========== API 封装 ==========
-const api = window.pywebview?.api;
+// 动态检测：pywebview 6.x 的 bridge 是异步注入的，不能在模块顶层缓存
+
+function getApi() {
+    return window.pywebview?.api;
+}
 
 async function callApi(method, ...args) {
+    const api = getApi();
     if (!api) {
         // 浏览器开发模式 fallback
         console.warn("pywebview API 不可用，使用模拟数据");
@@ -66,9 +71,16 @@ function parseTime(timeStr) {
 
 // --- 单批次清洗 Tab ---
 function BatchTab() {
+    // 组件挂载时生成时间戳，始终显示在文件名和勾选标签中
+    const initTs = React.useMemo(() => {
+        const now = new Date();
+        return `${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
+    }, []);
+    const [ts, setTs] = useState(initTs);
     const [source, setSource] = useState("");
     const [output, setOutput] = useState("");
-    const [outputName, setOutputName] = useState("Tenpay_merge.xlsx");
+    const [outputName, setOutputName] = useState(`Tenpay_merge_${initTs}.xlsx`);
+    const [processReg, setProcessReg] = useState(true);
     const [status, setStatus] = useState({ status: "idle", logs: [] });
     const [running, setRunning] = useState(false);
     const timerRef = useRef(null);
@@ -98,9 +110,19 @@ function BatchTab() {
 
     const handleStart = async () => {
         if (!source || !output) return;
+        // 刷新时间戳 MMDD_HHmm（以点击按钮时刻为准）
+        const now = new Date();
+        const newTs = `${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
+        setTs(newTs);
+
+        // 更新输入框显示带时间戳的最终文件名（先去除已有的时间戳后缀，避免重复）
+        const cleanBase = outputName.replace(/\.xlsx$/i, '').replace(/_\d{4}_\d{4}$/, '');
+        const finalName = `${cleanBase}_${newTs}.xlsx`;
+        setOutputName(finalName);
+
         setStatus({ status: "running", total: 0, current: 0, success: 0, fail: 0, skipped: 0, logs: [], result: {} });
         setRunning(true);
-        const result = await callApi('start_batch_process', source, output, outputName);
+        const result = await callApi('start_batch_process', source, output, finalName, processReg, newTs);
         if (result !== "started") {
             setStatus(s => ({ ...s, status: "error", logs: [...s.logs, `❌ ${result}`] }));
             setRunning(false);
@@ -136,6 +158,18 @@ function BatchTab() {
                         placeholder="Tenpay_merge.xlsx"
                     />
                 </div>
+                <div className="form-row">
+                    <label style={{display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none"}}>
+                        <input
+                            type="checkbox"
+                            checked={processReg}
+                            onChange={e => setProcessReg(e.target.checked)}
+                            disabled={running}
+                            style={{width: 16, height: 16, cursor: "pointer"}}
+                        />
+                        <span style={{fontSize: 13}}>同时清洗注册信息 → <code style={{fontSize: 12}}>TenpayRegInfo_merge_{ts}.xlsx</code></span>
+                    </label>
+                </div>
                 <div style={{textAlign: "center", marginTop: 12}}>
                     <button className="btn btn-primary btn-lg" onClick={handleStart}
                             disabled={running || !source || !output}>
@@ -160,9 +194,25 @@ function BatchTab() {
                         <span className="stat">⏭️ <span className="stat-skip">{status.skipped || 0}</span></span>
                     </div>
                     {status.status === "done" && status.result && (
-                        <div style={{marginTop: 12, padding: 12, background: "#f0fdf4", borderRadius: 6, fontSize: 13}}>
-                            ✅ 完成! 输出: {status.result.output}<br/>
-                            📊 总记录: {status.result.rows} 行 | 耗时: {status.result.elapsed} 秒
+                        <div style={{marginTop: 12}}>
+                            {/* 交易流水结果 */}
+                            <div style={{padding: 12, background: "#f0fdf4", borderRadius: 6, fontSize: 13, marginBottom: 8}}>
+                                <div style={{fontWeight: 600, marginBottom: 4}}>✅ 交易流水清洗完成</div>
+                                <div>输出: {status.result.output}</div>
+                                <div>📊 总记录: {status.result.rows} 行 | 耗时: {status.result.elapsed} 秒</div>
+                                {(status.result.parking_rows > 0) && (
+                                    <div>🅿️ 停车缴费: {status.result.parking_rows} 条</div>
+                                )}
+                            </div>
+                            {/* 注册信息结果（仅当有 reg 结果时显示） */}
+                            {status.result.reg_files !== undefined && (
+                                <div style={{padding: 12, background: "#eff6ff", borderRadius: 6, fontSize: 13}}>
+                                    <div style={{fontWeight: 600, marginBottom: 4}}>📋 注册信息清洗完成</div>
+                                    <div>输出: {status.result.reg_output}</div>
+                                    <div>📊 汇总: {status.result.reg_basic_rows} 条 | 变更: {status.result.reg_changes_rows} 条 | 自然人: {status.result.reg_person_rows} 人</div>
+                                    <div>文件: {status.result.reg_files} 个 | 成功: {status.result.reg_success} | 耗时: {status.result.reg_elapsed} 秒</div>
+                                </div>
+                            )}
                         </div>
                     )}
                     {status.status === "error" && (
@@ -848,4 +898,24 @@ function App() {
     );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+// pywebview 6.x: bridge 异步注入，等待 ready 事件后再渲染
+// 若 2 秒后仍未触发（浏览器开发模式），直接渲染（此时 callApi 走 mock 降级）
+let _appRendered = false;  // 防止重复渲染
+
+function renderApp() {
+    if (_appRendered) return;
+    _appRendered = true;
+    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+}
+
+if (window.pywebview) {
+    // pywebview 环境：等待 bridge 就绪
+    window.addEventListener('pywebviewready', renderApp);
+    // 兜底：若事件已错过（bridge 在脚本加载前就已就绪），直接渲染
+    if (window.pywebview.api) {
+        renderApp();
+    }
+} else {
+    // 浏览器开发模式：直接渲染（callApi 内部会降级到 mock）
+    renderApp();
+}

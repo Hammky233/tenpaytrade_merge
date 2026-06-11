@@ -19,6 +19,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from service.pipeline import TenpayPipeline, ProgressInfo, post_merge_analysis
 from core.merger import merge_dataframes, deduplicate
 from core.writer import write_excel
+from core.reg_reader import read_tenpay_reg_info
+from core.reg_processor import process_reg_data, build_person_info
+from core.writer import write_reg_excel
 import pandas as pd
 
 
@@ -79,9 +82,17 @@ class Api:
             msg += "。请运行: sudo apt install python3-tk (或等效命令)"
         return f"__ERROR__:{msg}"
 
-    def start_batch_process(self, source: str, output: str, output_name: str = "Tenpay_merge.xlsx") -> str:
+    def start_batch_process(self, source: str, output: str, output_name: str = "Tenpay_merge.xlsx",
+                            process_reg: bool = False, timestamp: str = "") -> str:
         """
         启动单批次处理（后台线程），返回 "started" 或错误信息
+
+        Args:
+            source: 数据源文件夹
+            output: 输出文件夹
+            output_name: 交易流水输出文件名
+            process_reg: 是否同时清洗注册信息（TenpayRegInfo.txt）
+            timestamp: 时间戳（MMDD_HHmm 格式），用于文件名后缀
         """
         if self._thread and self._thread.is_alive():
             return "已有任务正在运行"
@@ -90,6 +101,11 @@ class Api:
         if not output:
             return "请先选择输出文件夹"
 
+        # 给文件名加上时间戳后缀（如 Tenpay_merge.xlsx → Tenpay_merge_0611_1532.xlsx）
+        if timestamp:
+            base, ext = (output_name.rsplit('.', 1) + [''])[:2]
+            output_name = f"{base}_{timestamp}.{ext}" if ext else f"{base}_{timestamp}"
+
         self._pipeline = TenpayPipeline(
             source_dir=source,
             output_dir=output,
@@ -97,20 +113,126 @@ class Api:
         )
 
         def _run():
+            # ── 交易流水清洗 ──
             try:
                 self._pipeline.run()
             except Exception as e:
                 import traceback
                 self._pipeline.progress.status = "error"
                 self._pipeline.progress.add_log(f"❌ 处理异常: {e}")
-                # 将完整堆栈也写入日志，方便排查
                 for line in traceback.format_exc().splitlines():
                     if line.strip():
                         self._pipeline.progress.add_log(f"   {line.strip()}")
 
+            # ── 注册信息清洗（可选）──
+            if process_reg and self._pipeline.progress.status != "error":
+                try:
+                    # 前端在 status="done" 时停止轮询，必须保持 running 状态
+                    self._pipeline.progress.status = "running"
+                    self._run_reg_process(source, output, timestamp)
+                except Exception as e:
+                    import traceback
+                    self._pipeline.progress.add_log(f"❌ 注册信息清洗异常: {e}")
+                    for line in traceback.format_exc().splitlines():
+                        if line.strip():
+                            self._pipeline.progress.add_log(f"   {line.strip()}")
+                finally:
+                    # 全部完成后标记 done，前端停止轮询
+                    self._pipeline.progress.status = "done"
+
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
         return "started"
+
+    def _run_reg_process(self, source: str, output: str, timestamp: str = ""):
+        """在交易流水处理完成后，额外执行注册信息清洗（复用 progress 日志）。"""
+        import time
+        progress = self._pipeline.progress if self._pipeline else None
+
+        # 注册信息输出文件名
+        reg_name = f"TenpayRegInfo_merge_{timestamp}.xlsx" if timestamp else "TenpayRegInfo_merge.xlsx"
+
+        def _log(msg: str):
+            if progress:
+                progress.add_log(msg)
+            # 也走标准日志
+            import logging
+            logging.getLogger("TenpayMerge").info(msg)
+
+        _log("─" * 40)
+        _log("📋 开始清洗注册信息...")
+
+        # 1. 扫描 TenpayRegInfo.txt 文件
+        reg_files = []
+        for root, dirs, filenames in os.walk(source):
+            for fn in filenames:
+                if fn == "TenpayRegInfo.txt":
+                    reg_files.append(os.path.join(root, fn))
+        reg_files.sort()
+
+        if not reg_files:
+            _log("⚠️ 未找到 TenpayRegInfo.txt 文件，跳过注册信息清洗")
+            return
+
+        _log(f"扫描到 {len(reg_files)} 个 TenpayRegInfo.txt 文件")
+
+        t_start = time.time()
+
+        # 2. 逐文件解析
+        success = 0
+        fail = 0
+        skipped = 0
+        records = []
+
+        for i, filepath in enumerate(reg_files, 1):
+            try:
+                rel_path = os.path.relpath(filepath, source)
+            except ValueError:
+                rel_path = filepath
+
+            try:
+                result = read_tenpay_reg_info(filepath)
+                if result is None:
+                    skipped += 1
+                else:
+                    records.append(result)
+                    success += 1
+            except Exception as e:
+                fail += 1
+                _log(f"[{i}/{len(reg_files)}] 失败: {rel_path} — {e}")
+
+        # 3. 清洗合并
+        basic_df, changes_df = process_reg_data(records)
+
+        # 4. 提取人员基础信息
+        person_df = build_person_info(basic_df)
+
+        # 5. 输出 Excel
+        output_path = os.path.join(output, reg_name)
+        result_path = write_reg_excel(basic_df, changes_df, output_path, person_df=person_df)
+
+        elapsed = time.time() - t_start
+
+        # 6. 日志摘要 + 写入 result 供前端展示
+        _log(f"✅ 注册信息清洗完成!")
+        _log(f"文件总数: {len(reg_files)} | 成功: {success} | 失败: {fail} | 跳过: {skipped}")
+        _log(f"注册信息汇总: {len(basic_df)} 条 | 变更记录: {len(changes_df)} 条 | 基础信息(自然人): {len(person_df)} 人")
+        _log(f"耗时: {elapsed:.1f} 秒")
+        if result_path:
+            _log(f"输出文件: {result_path}")
+        else:
+            _log("⚠️ 注册信息输出为空（无有效数据）")
+
+        # 写入 reg 结果供前端分别展示
+        if progress:
+            progress.result["reg_output"] = result_path or ""
+            progress.result["reg_basic_rows"] = len(basic_df)
+            progress.result["reg_changes_rows"] = len(changes_df)
+            progress.result["reg_person_rows"] = len(person_df)
+            progress.result["reg_files"] = len(reg_files)
+            progress.result["reg_success"] = success
+            progress.result["reg_fail"] = fail
+            progress.result["reg_elapsed"] = round(elapsed, 1)
 
     def get_batch_status(self) -> dict:
         """获取单批次处理进度"""
