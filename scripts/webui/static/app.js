@@ -1,4 +1,4 @@
-// 财付通交易流水处理工具 v4.0 — React 前端
+// 财付通交易流水处理工具 — React 前端（版本号见 scripts/version.py）
 
 const { useState, useEffect, useRef, useCallback } = React;
 
@@ -31,6 +31,7 @@ function mockApi(method, ...args) {
         case 'get_batch_status': return {
             status: "idle", total: 0, current: 0, success: 0, fail: 0, skipped: 0, logs: [], result: {}
         };
+        case 'get_version': return "4.1";
         default: return null;
     }
 }
@@ -867,12 +868,17 @@ function TimePeriodTab() {
 // ========== 根组件 ==========
 function App() {
     const [activeTab, setActiveTab] = useState("batch");
+    const [version, setVersion] = useState("4.1");  // 从 bridge 动态获取，失败时显示默认值
+
+    useEffect(() => {
+        callApi('get_version').then(v => { if (v) setVersion(v); }).catch(() => {});
+    }, []);
 
     return (
         <>
             <div className="header">
                 <h1>💳 财付通交易流水处理工具</h1>
-                <span className="version">v4.0</span>
+                <span className="version">v{version || "4.1"}</span>
             </div>
             <div className="tabs">
                 <div className={`tab ${activeTab === "batch" ? "active" : ""}`} onClick={() => setActiveTab("batch")}>

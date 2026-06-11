@@ -32,6 +32,11 @@ class Api:
         self._pipeline: TenpayPipeline | None = None
         self._thread: threading.Thread | None = None
 
+    def get_version(self) -> str:
+        """返回当前版本号"""
+        from version import VERSION
+        return VERSION
+
     def select_folder(self) -> str:
         """打开文件夹选择对话框，返回所选路径（取消返回空字符串）"""
         if not _TKINTER_AVAILABLE:

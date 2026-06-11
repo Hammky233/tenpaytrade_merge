@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-财付通交易流水处理工具 v4.0 — GUI 入口（pywebview）
+财付通交易流水处理工具 — GUI 入口（pywebview）
 """
 
 import os
@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import webview
 from webui.bridge import Api
 from utils.paths import get_scripts_dir
+from version import VERSION
 
 
 def main():
@@ -27,7 +28,7 @@ def main():
 
     # 创建窗口
     window = webview.create_window(
-        title="财付通交易流水处理工具 v4.0",
+        title=f"财付通交易流水处理工具 v{VERSION}",
         url=index_html,
         js_api=api,
         width=860,

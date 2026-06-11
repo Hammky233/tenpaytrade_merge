@@ -1,4 +1,4 @@
-# 财付通交易流水处理工具 v4.0 — Python 依赖
+# 财付通交易流水处理工具 — Python 依赖（版本号见 scripts/version.py）
 # 安装: pip install -r requirements.txt
 
 # 数据处理

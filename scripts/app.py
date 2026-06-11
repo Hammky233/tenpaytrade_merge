@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-财付通交易流水处理工具 v4.0 — CLI 单批次入口
+财付通交易流水处理工具 — CLI 单批次入口
 
 用法:
     python app.py --source <数据源目录> --output <输出目录> [--name 输出文件名]
@@ -19,11 +19,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from utils.logger import setup_logger
 from service.pipeline import TenpayPipeline
+from version import VERSION
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="财付通交易流水处理工具 v4.0 — 单批次清洗",
+        description=f"财付通交易流水处理工具 v{VERSION} — 单批次清洗",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
@@ -64,7 +65,7 @@ def main():
     logger = setup_logger(log_dir=log_dir)
 
     logger.info("=" * 60)
-    logger.info("财付通交易流水处理工具 v4.0（单批次）")
+    logger.info(f"财付通交易流水处理工具 v{VERSION}（单批次）")
     logger.info(f"数据源: {args.source}")
     logger.info(f"输出: {os.path.join(args.output, args.name)}")
     logger.info("=" * 60)
