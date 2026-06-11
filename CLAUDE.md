@@ -206,3 +206,51 @@ React/Babel 的 `.js` 文件存放在 `webui/static/` 本地（通过 npm 安装
 - 仅处理 `.txt` 文件，忽略 `.xlsx`（src_ref 中的 xlsx 是旧脚本的二次产物，非原始数据）
 - `scripts/Tenpay_merge_v2.0.py` 是原始单文件脚本，保留作为参考
 - `requirements.txt` 位于项目根目录，记录所有直接依赖
+
+## 打包构建
+
+### Windows exe
+
+```powershell
+pyinstaller --onefile --name tenpaytrade-gui --paths scripts `
+  --add-data "scripts/config;scripts/config" `
+  --add-data "scripts/utils;scripts/utils" `
+  --add-data "scripts/webui/static;scripts/webui/static" `
+  --hidden-import=utils.paths `
+  --hidden-import=webview.platforms.edgechromium `
+  --hidden-import=tkinter scripts/gui_app.py
+```
+
+### Linux 可执行文件（Docker 本地构建）
+
+**前置条件**：安装 Docker Desktop 并启动。
+
+```bash
+# 项目根目录运行（Git Bash 或 WSL）
+bash linux_build/build.sh
+```
+
+产物输出到 `dist/`：`tenpaytrade` / `tenpaytrade-merge` / `tenpaytrade-reg` / `tenpaytrade-gui` / `启动工具.sh`。GLIBC 锁定 2.31（ubuntu:20.04），兼容 Ubuntu 20.04+。
+
+### 构建经验（踩坑记录）
+
+1. **Docker Desktop 镜像源**：国内需配置可用 mirror。项目默认使用 `docker.1ms.run` + `docker.xuanyuan.me`。如果拉取失败，检查 `~/.docker/daemon.json` 中的 `registry-mirrors`，重启 Docker Desktop 生效。
+
+2. **deadsnakes PPA 不可用**：从国内访问 `ppa.launchpad.net` 经常超时，Dockerfile 改用**从源码编译 Python 3.12**，源码包通过 `registry.npmmirror.com`（淘宝 NPM 镜像）下载。编译耗时 ~4 分钟，但 Docker 层缓存后首次构建即永久生效。
+
+3. **PyInstaller 6.x `--add-data` 格式**：Linux 下用冒号分隔 `SRC:DEST`，DEST 必须是**相对路径**。正确格式：
+   ```bash
+   --add-data "/project/scripts/config:scripts/config"   # ✅ DEST 相对
+   --add-data "/project/scripts/config:/project/scripts/config"  # ❌ DEST 绝对，PyInstaller 6.x 报错
+   ```
+
+4. **Git Bash 路径映射问题**：`docker run -v "$PROJECT_DIR:/project"` 在 Git Bash 中可能因 MSYS2 路径转换导致挂载失败。改用 **PowerShell 直接运行 Docker 命令**更可靠：
+   ```powershell
+   docker run --rm -v "C:\CCProject\tenpaytrade_merge:/project" tenpaytrade-builder bash /project/linux_build/_build_inside.sh
+   ```
+
+5. **PowerShell 误报错误**：Docker/PyInstaller 输出到 stderr 时，PowerShell 会标记为红色 `NativeCommandError`，实际构建成功。判断标准是看 `Build complete!` 和 `exit code 0`。
+
+6. **`dist/` 已 gitignore**：构建产物不跟踪。`linux_build/` 是源码（Dockerfile + 脚本），**应提交跟踪**。
+
+7. **`chinesecalendar` hidden import 警告**：PyInstaller 报 `Hidden import 'chinesecalendar' not found`，但实际通过正常 import 链（processor.py → pipeline.py → gui_app.py）自动发现，不影响功能。`user32`/`msvcrt` 警告同理（Windows 库，Linux 忽略即可）。

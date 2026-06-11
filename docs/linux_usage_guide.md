@@ -12,8 +12,9 @@
 3. [图形界面模式（推荐）](#三图形界面模式推荐)
 4. [命令行模式：单批次清洗](#四命令行模式单批次清洗)
 5. [命令行模式：多批次合并](#五命令行模式多批次合并)
-6. [输出结果说明](#六输出结果说明)
-7. [常见问题排查](#七常见问题排查)
+6. [命令行模式：注册信息提取](#六命令行模式注册信息提取)
+7. [输出结果说明](#七输出结果说明)
+8. [常见问题排查](#八常见问题排查)
 
 ---
 
@@ -32,6 +33,7 @@
    | `tenpaytrade-gui` | 图形界面主程序 | 由启动脚本自动调用 |
    | `tenpaytrade` | 命令行：单批次清洗 | 终端运行 `./tenpaytrade -s ... -o ...` |
    | `tenpaytrade-merge` | 命令行：多批次合并 | 终端运行 `./tenpaytrade-merge -i ... -o ...` |
+   | `tenpaytrade-reg` | 命令行：注册信息提取 | 终端运行 `./tenpaytrade-reg -s ... -o ...` |
 
 ### 方式 2：通过 U 盘 / 内网传输
 
@@ -42,7 +44,8 @@ tenpaytrade-linux/
 ├── 启动工具.sh          ← 双击这个或用终端运行
 ├── tenpaytrade-gui       （约 60-80 MB）
 ├── tenpaytrade           （约 30-50 MB）
-└── tenpaytrade-merge     （约 30-50 MB）
+├── tenpaytrade-merge     （约 30-50 MB）
+└── tenpaytrade-reg       （约 30-50 MB）
 ```
 
 ---
@@ -67,7 +70,7 @@ cd ~/下载
 ### 2.3 赋予执行权限（只需做一次）
 
 ```bash
-chmod +x 启动工具.sh tenpaytrade tenpaytrade-merge tenpaytrade-gui
+chmod +x 启动工具.sh tenpaytrade tenpaytrade-merge tenpaytrade-reg tenpaytrade-gui
 ```
 
 > **说明**：这条命令告诉系统"这些文件可以运行"。没有报错就是成功了。
@@ -239,7 +242,49 @@ mkdir -p ~/桌面/结果
 
 ---
 
-## 六、输出结果说明
+## 六、命令行模式：注册信息提取
+
+### 这是什么？
+
+提取 `TenpayRegInfo.txt`（财付通注册信息）中的账户状态、身份信息、变更历史，合并去重后输出 Excel。
+
+### 数据要求
+
+数据源文件夹中需要包含名为 `TenpayRegInfo.txt` 的文件（位于目录树任意层级），工具会自动递归搜索。
+
+### 运行命令
+
+```bash
+./tenpaytrade-reg -s 数据源文件夹路径 -o 输出文件夹路径
+```
+
+### 实际例子
+
+```bash
+./tenpaytrade-reg -s ~/桌面/案件数据 -o ~/桌面/结果
+```
+
+### 自定义输出文件名
+
+```bash
+./tenpaytrade-reg -s ~/桌面/案件数据 -o ~/桌面/结果 -n 20260421_注册信息汇总.xlsx
+```
+
+### 输出内容
+
+输出的 Excel 包含 3 个工作表（Sheet）：
+
+| 工作表名 | 说明 |
+|---------|------|
+| **注册信息汇总** | 去重后的主记录（账户状态、姓名、身份证、手机等） |
+| **变更记录** | 身份变更 + 注销历史记录 |
+| **基础信息** | 自然人基础信息（去重后的唯一身份） |
+
+---
+
+## 七、输出结果说明
+
+### 交易流水输出
 
 输出的 Excel 文件包含 **1~3 个工作表**（Sheet）：
 
@@ -266,7 +311,7 @@ mkdir -p ~/桌面/结果
 
 ---
 
-## 七、常见问题排查
+## 八、常见问题排查
 
 ### Q1：运行 `./tenpaytrade` 提示"权限不够"（Permission denied）
 
@@ -327,7 +372,7 @@ ls -R 你的数据源文件夹 | grep TenpayTrades.txt
 
 ### Q7：能在没有图形界面的服务器上运行吗？
 
-可以。这两个工具都是**纯命令行**的，不需要桌面环境。通过 SSH 远程登录服务器即可使用。
+可以。这些工具都是**纯命令行**的，不需要桌面环境。通过 SSH 远程登录服务器即可使用。
 
 ---
 
@@ -337,11 +382,12 @@ ls -R 你的数据源文件夹 | grep TenpayTrades.txt
 
 ```bash
 # 移动到 /usr/local/bin（需要 sudo 权限）
-sudo cp tenpaytrade tenpaytrade-merge /usr/local/bin/
+sudo cp tenpaytrade tenpaytrade-merge tenpaytrade-reg /usr/local/bin/
 
 # 之后在任何目录都能直接运行
 tenpaytrade -s 数据目录 -o 输出目录
 tenpaytrade-merge -i a.xlsx b.xlsx -o merged.xlsx
+tenpaytrade-reg -s 数据目录 -o 输出目录
 ```
 
 ---

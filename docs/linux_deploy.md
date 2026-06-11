@@ -1,6 +1,6 @@
 # Linux 部署指南
 
-财付通交易流水处理工具 v4.0 支持在 Linux 系统上运行。
+财付通交易流水处理工具 v4.1 支持在 Linux 系统上运行。
 
 ## 系统要求
 
@@ -91,22 +91,88 @@ sudo apt install fonts-noto-cjk
 
 ## 五、打包分发（PyInstaller）
 
-如果需要在无 Python 环境的 Linux 机器上运行，可用 PyInstaller 打包：
+### 5.1 本地 Docker 构建（推荐 ✅）
+
+使用 Docker 在本地构建 Linux 可执行文件，无需 GitHub Actions，产物兼容 GLIBC 2.31+（Ubuntu 20.04+）。
+
+**前置条件**：安装 [Docker Desktop](https://www.docker.com/products/docker-desktop/) 并启动。
+
+**一键构建**（在项目根目录运行）：
+
+```bash
+bash linux_build/build.sh
+```
+
+**构建产物**（输出到 `dist/` 目录）：
+
+| 文件 | 大小 | 用途 |
+|------|------|------|
+| `tenpaytrade` | ~30 MB | CLI 单批次交易流水清洗 |
+| `tenpaytrade-merge` | ~30 MB | CLI 多批次合并去重 |
+| `tenpaytrade-reg` | ~30 MB | CLI 注册信息提取 |
+| `tenpaytrade-gui` | ~60 MB | GUI 图形界面 |
+| `启动工具.sh` | ~1 KB | 启动脚本（含系统依赖检查） |
+
+**工作原理**：
+1. `build.sh` 构建 `ubuntu:20.04` Docker 镜像（预装 Python 3.12 + 系统依赖）
+2. 容器挂载项目目录，在容器内执行 PyInstaller 打包
+3. 产物通过 volume 映射输出到宿主机 `dist/` 目录
+4. GLIBC 锁定在 2.31，确保与 Ubuntu 20.04+ 兼容
+
+**Docker Hub 不可用？** 脚本已配置阿里云/清华镜像源，无需科学上网。
+
+**清理中间产物**：
+```bash
+# 中间产物（build/ *.spec）自动清理，仅保留 dist/
+```
+
+### 5.2 原生 PyInstaller（本地 Python 环境）
+
+如果已有 Python 3.10+ 环境，也可直接打包：
 
 ```bash
 pip install pyinstaller
 
-# CLI 版（无 GUI 依赖）
-pyinstaller --onefile --name tenpaytrade scripts/app.py
+# CLI — 单批次清洗
+pyinstaller --onefile --name tenpaytrade \
+    --paths scripts \
+    --add-data "scripts/config:scripts/config" \
+    --add-data "scripts/utils:scripts/utils" \
+    --hidden-import=chinesecalendar \
+    --hidden-import=utils.paths \
+    scripts/app.py
 
-# GUI 版
+# CLI — 多批次合并
+pyinstaller --onefile --name tenpaytrade-merge \
+    --paths scripts \
+    --add-data "scripts/utils:scripts/utils" \
+    --hidden-import=utils.paths \
+    scripts/app_merge.py
+
+# CLI — 注册信息提取
+pyinstaller --onefile --name tenpaytrade-reg \
+    --paths scripts \
+    --add-data "scripts/utils:scripts/utils" \
+    --hidden-import=utils.paths \
+    scripts/app_reg.py
+
+# GUI
 pyinstaller --onefile --name tenpaytrade-gui \
-    --collect-data pywebview \
+    --paths scripts \
+    --add-data "scripts/config:scripts/config" \
+    --add-data "scripts/utils:scripts/utils" \
+    --add-data "scripts/webui/static:scripts/webui/static" \
+    --hidden-import=chinesecalendar \
+    --hidden-import=utils.paths \
+    --hidden-import=webview \
+    --hidden-import=webview.platforms.cef \
     --hidden-import=webview.platforms.gtk \
+    --hidden-import=webview.platforms.qt \
+    --hidden-import=tkinter \
     scripts/gui_app.py
 ```
 
-> **注意**：PyInstaller 打包的可执行文件只能在相同或更新的 glibc 版本上运行。建议在目标系统的最低支持版本上执行打包。
+> **注意**：PyInstaller 打包的可执行文件只能在相同或更新的 GLIBC 版本上运行。建议在目标系统的最低支持版本上执行打包。若目标为 Ubuntu 20.04（GLIBC 2.31），请使用 Docker 构建方式以确保兼容性。
 
 ## 六、Windows ↔ Linux 数据交换注意
 
