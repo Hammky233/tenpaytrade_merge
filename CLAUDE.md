@@ -31,6 +31,29 @@ python scripts/app_merge.py -i output/batch_0605.xlsx output/batch_0607.xlsx -o 
 python scripts/app_reg.py -s src_ref/财付通20260421 -o output
 ```
 
+### 打包命令
+
+```powershell
+# Windows exe（需在项目根目录运行）
+pyinstaller --onefile --name tenpaytrade-gui --paths scripts `
+  --add-data "scripts/config;scripts/config" `
+  --add-data "scripts/utils;scripts/utils" `
+  --add-data "scripts/webui/static;scripts/webui/static" `
+  --hidden-import=utils.paths `
+  --hidden-import=webview.platforms.edgechromium `
+  --hidden-import=tkinter scripts/gui_app.py
+
+# 清理中间产物
+Remove-Item -Recurse -Force build; Remove-Item -Force *.spec
+```
+
+```bash
+# Linux（Docker 本地构建）
+bash linux_build/build.sh
+# 或直接用 PowerShell：
+docker run --rm -v "C:\CCProject\tenpaytrade_merge:/project" tenpaytrade-builder bash /project/linux_build/_build_inside.sh
+```
+
 ## 架构
 
 ```
@@ -38,6 +61,7 @@ scripts/
 ├── app.py / app_merge.py       # CLI 入口（单批次交易 / 多批次合并）
 ├── app_reg.py                  # CLI 入口（注册信息提取合并）
 ├── gui_app.py                  # pywebview GUI 入口
+├── version.py                  # 单一版本号来源（VERSION = "4.1"），Python/前端/打包共享
 ├── core/
 │   ├── reader.py               # txt 读取（交易流水），自动编码检测，空文件跳过
 │   ├── reg_reader.py           # txt 读取（注册信息），两区域格式 + 银行卡扩展行 + 账号不存在
@@ -61,6 +85,12 @@ scripts/
 └── webui/
     ├── bridge.py               # Python → JS API（文件选择、批处理、合并、注册信息清洗、停车/时段/特殊交易配置读写）
     └── static/                 # React 前端（本地 JS，无 CDN 依赖）
+
+linux_build/                    # Linux Docker 本地打包（源码，已跟踪）
+├── Dockerfile                  # ubuntu:20.04 + Python 3.12 源码编译 + 系统依赖
+├── build.sh                    # 宿主机一键入口（docker build + run）
+├── _build_inside.sh            # 容器内构建脚本（venv → pip → 4 路 PyInstaller）
+└── .dockerignore               # 排除 .venv .git dist 加速构建上下文
 ```
 
 ## 关键设计决策
@@ -174,7 +204,7 @@ React/Babel 的 `.js` 文件存放在 `webui/static/` 本地（通过 npm 安装
 
 ### 注册信息提取合并
 
-`app_reg.py` 独立工具。遍历目录树中所有 `TenpayRegInfo.txt`，提取注册信息（账户状态、账号、姓名、身份证号、绑定手机等），合并去重后输出双 sheet Excel。
+`app_reg.py` 独立工具。遍历目录树中所有 `TenpayRegInfo.txt`，提取注册信息（账户状态、账号、姓名、身份证号、绑定手机等），合并去重后输出三 sheet Excel。
 
 **TenpayRegInfo.txt 格式**（UTF-8 + Tab 分隔，两区域）：
 - **区域一（基本信息表）**：表头（9列：账户状态/账号/注册姓名/注册时间/注册身份证号/绑定手机/绑定状态/开户行信息/银行账号）+ 主记录行 + 可选银行卡扩展行（前6列为空）
@@ -190,9 +220,10 @@ React/Babel 的 `.js` 文件存放在 `webui/static/` 本地（通过 npm 安装
 - `身份信息变更`：状态=正常 + 注销区有数据 → 旧身份→新身份
 - `账户注销`：状态=已注销 + 注销区有数据 → 注销记录
 
-**输出 Excel**：
+**输出 Excel**（三 sheet）：
 - Sheet「注册信息汇总」：去重后的主记录（按 账号+身份证号 去重），含数据来源和调证编号
 - Sheet「变更记录」：所有变更/注销历史，含变更类型、当前/旧身份对照
+- Sheet「基础信息」：自然人基础信息（`build_person_info()` 从汇总表抽唯一身份）
 
 **设计约束**：银行账号相关字段（开户行信息、银行账号）不参与合并清洗，直接透传。
 
@@ -206,6 +237,8 @@ React/Babel 的 `.js` 文件存放在 `webui/static/` 本地（通过 npm 安装
 - 仅处理 `.txt` 文件，忽略 `.xlsx`（src_ref 中的 xlsx 是旧脚本的二次产物，非原始数据）
 - `scripts/Tenpay_merge_v2.0.py` 是原始单文件脚本，保留作为参考
 - `requirements.txt` 位于项目根目录，记录所有直接依赖
+- **版本号**统一在 `scripts/version.py`（`VERSION = "4.1"`），所有入口（`app.py`/`app_merge.py`/`app_reg.py`/`gui_app.py`/`bridge.py`）从此动态读取，前端通过 `get_version()` API 获取。`.spec`/`index.html`/`style.css` 中的版本引用仅作注释，不参与构建逻辑
+- `.gitattributes` 强制 `*.sh` 和 `Dockerfile` 使用 LF 行尾，确保 Linux 容器兼容
 
 ## 打包构建
 
