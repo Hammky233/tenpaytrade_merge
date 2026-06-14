@@ -31,7 +31,8 @@ def post_merge_analysis(merged, progress=None) -> dict:
         progress: ProgressInfo 实例（可选），用于 GUI 日志
 
     Returns:
-        {"parking_df": DataFrame|None, "special_df": DataFrame|None}
+        {"parking_df": DataFrame|None, "special_df": DataFrame|None,
+         "mahjong_df": DataFrame|None, "mahjong_stats_df": DataFrame|None}
     """
 
     def _log(msg: str):
@@ -70,7 +71,42 @@ def post_merge_analysis(merged, progress=None) -> dict:
         logger.warning(f"特殊交易筛选异常: {e}", exc_info=True)
         _log(f"⚠️ 特殊交易筛选失败: {e}")
 
-    return {"parking_df": parking_df, "special_df": special_df}
+    # --- 疑似麻友识别 ---
+    mahjong_df = None
+    mahjong_stats_df = None
+    try:
+        from core.mahjong import load_mahjong_config, detect_mahjong_records
+
+        mj_config = load_mahjong_config()
+        mahjong_df, mahjong_stats_df = detect_mahjong_records(merged, mj_config)
+        if not mahjong_df.empty:
+            _log(f"🀄 识别到 {len(mahjong_stats_df)} 名疑似麻友, "
+                 f"涉及 {len(mahjong_df)} 条交易记录")
+        else:
+            _log("未识别到疑似麻友记录")
+    except Exception as e:
+        logger.warning(f"疑似麻友识别异常: {e}", exc_info=True)
+        _log(f"⚠️ 疑似麻友识别失败: {e}")
+
+    # --- 群红包识别 ---
+    grp_df = None
+    grp_stats_df = None
+    try:
+        from core.group_red_packet import detect_group_red_packet_records
+
+        grp_df, grp_stats_df = detect_group_red_packet_records(merged)
+        if not grp_df.empty:
+            _log(f"🧧 识别到 {len(grp_df)} 条群红包记录, "
+                 f"涉及 {len(grp_stats_df)} 个对手方")
+        else:
+            _log("未识别到群红包记录")
+    except Exception as e:
+        logger.warning(f"群红包识别异常: {e}", exc_info=True)
+        _log(f"⚠️ 群红包识别失败: {e}")
+
+    return {"parking_df": parking_df, "special_df": special_df,
+            "mahjong_df": mahjong_df, "mahjong_stats_df": mahjong_stats_df,
+            "grp_df": grp_df, "grp_stats_df": grp_stats_df}
 
 
 class ProgressInfo:
@@ -224,14 +260,28 @@ class TenpayPipeline:
 
         merged = deduplicate(merged)
 
-        # 4.5 停车缴费识别 + 特殊交易筛选（去重后进行）
+        # 4.5 停车缴费识别 + 特殊交易筛选 + 疑似麻友识别 + 群红包识别（去重后进行）
         analysis = post_merge_analysis(merged, self.progress)
         parking_df = analysis["parking_df"]
         special_df = analysis["special_df"]
+        mahjong_df = analysis.get("mahjong_df")
+        mahjong_stats_df = analysis.get("mahjong_stats_df")
+        grp_df = analysis.get("grp_df")
+        grp_stats_df = analysis.get("grp_stats_df")
 
         # 5. 输出
         output_path = os.path.join(self.output_dir, self.output_name)
-        write_excel(merged, output_path, parking_df=parking_df, special_df=special_df)
+        try:
+            result_path = write_excel(merged, output_path,
+                        parking_df=parking_df, special_df=special_df,
+                        mahjong_df=mahjong_df, mahjong_stats_df=mahjong_stats_df,
+                        grp_df=grp_df, grp_stats_df=grp_stats_df)
+        except Exception as _we:
+            import traceback
+            _we_detail = traceback.format_exc()
+            logger.error(f"write_excel 调用异常: {_we}\n{_we_detail}")
+            self.progress.add_log(f"❌ Excel 输出异常: {_we}")
+            raise
 
         elapsed = time.time() - start_time
         self.progress.status = "done"
@@ -248,6 +298,10 @@ class TenpayPipeline:
             "rows": len(merged),
             "elapsed": round(elapsed, 1),
             "parking_rows": len(parking_df) if parking_df is not None else 0,
+            "mahjong_people": len(mahjong_stats_df) if mahjong_stats_df is not None else 0,
+            "mahjong_rows": len(mahjong_df) if mahjong_df is not None else 0,
+            "grp_rows": len(grp_df) if grp_df is not None else 0,
+            "grp_people": len(grp_stats_df) if grp_stats_df is not None else 0,
         }
 
         logger.info(f"管道完成: {self.progress.result}")

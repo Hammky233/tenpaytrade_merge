@@ -16,6 +16,10 @@ except ImportError:
 # 确保项目根目录在 sys.path 中
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# 初始化日志（GUI 模式下必须手动配置，否则 writer 等模块的 logger 输出不可见）
+from utils.logger import setup_logger as _setup_logger
+_setup_logger(log_dir=None)  # 控制台 handler，GUI 模式下不写文件
+
 from service.pipeline import TenpayPipeline, ProgressInfo, post_merge_analysis
 from core.merger import merge_dataframes, deduplicate
 from core.writer import write_excel
@@ -106,10 +110,8 @@ class Api:
         if not output:
             return "请先选择输出文件夹"
 
-        # 给文件名加上时间戳后缀（如 Tenpay_merge.xlsx → Tenpay_merge_0611_1532.xlsx）
-        if timestamp:
-            base, ext = (output_name.rsplit('.', 1) + [''])[:2]
-            output_name = f"{base}_{timestamp}.{ext}" if ext else f"{base}_{timestamp}"
+        # 时间戳已由前端拼入 output_name，此处不再重复追加
+        # （timestamp 参数仅用于注册信息输出文件名）
 
         self._pipeline = TenpayPipeline(
             source_dir=source,
@@ -290,12 +292,19 @@ class Api:
                 merged = deduplicate(merged)
                 after = len(merged)
 
-                # 停车缴费识别 + 特殊交易筛选（通过共享函数，与 pipeline 行为一致）
+                # 停车缴费识别 + 特殊交易筛选 + 疑似麻友识别 + 群红包识别（通过共享函数，与 pipeline 行为一致）
                 analysis = post_merge_analysis(merged)
                 parking_df = analysis["parking_df"]
                 special_df = analysis["special_df"]
+                mahjong_df = analysis.get("mahjong_df")
+                mahjong_stats_df = analysis.get("mahjong_stats_df")
+                grp_df = analysis.get("grp_df")
+                grp_stats_df = analysis.get("grp_stats_df")
 
-                write_excel(merged, output, parking_df=parking_df, special_df=special_df)
+                write_excel(merged, output,
+                            parking_df=parking_df, special_df=special_df,
+                            mahjong_df=mahjong_df, mahjong_stats_df=mahjong_stats_df,
+                            grp_df=grp_df, grp_stats_df=grp_stats_df)
 
                 progress.status = "done"
                 progress.add_log(f"✅ 合并完成!")

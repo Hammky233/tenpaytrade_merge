@@ -4,11 +4,28 @@ Excel 输出模块
 
 import logging
 import os
+import re
 import pandas as pd
 from openpyxl.styles import PatternFill
 from utils.columns import find_column
 
 logger = logging.getLogger("TenpayMerge")
+
+# openpyxl 非法字符正则（与 openpyxl.cell.cell.ILLEGAL_CHARACTERS_RE 一致）
+# 控制字符 \x00-\x08, \x0B-\x0C, \x0E-\x1F 在 Excel/XML 中不允许
+_ILLEGAL_CHARS_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
+
+
+def _sanitize_for_excel(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    移除 DataFrame 所有字符串列中的 Excel 非法控制字符。
+    兼容 pandas 2.0+ StringDtype 和旧版 object dtype。
+    """
+    for col in df.columns:
+        # pandas 2.0+ 的 dtype=str 是 StringDtype，不是 object，用 is_string_dtype 统一判断
+        if pd.api.types.is_string_dtype(df[col]):
+            df[col] = df[col].astype(str).str.replace(_ILLEGAL_CHARS_RE, '', regex=True)
+    return df
 
 # 黄色填充（用于标记不确定的行）
 YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
@@ -116,6 +133,10 @@ def write_excel(
     sheet_name: str = "财付通交易汇总",
     parking_df: pd.DataFrame | None = None,
     special_df: pd.DataFrame | None = None,
+    mahjong_df: pd.DataFrame | None = None,
+    mahjong_stats_df: pd.DataFrame | None = None,
+    grp_df: pd.DataFrame | None = None,
+    grp_stats_df: pd.DataFrame | None = None,
 ) -> str:
     """
     将 DataFrame 写入 Excel 文件，自动调整列宽。
@@ -126,6 +147,10 @@ def write_excel(
         sheet_name: 主工作表名称
         parking_df: 可选的停车缴费 DataFrame，写入独立工作表「停车缴费」
         special_df: 可选的特殊交易 DataFrame，写入独立工作表「特殊交易」
+        mahjong_df: 可选的疑似麻友交易明细 DataFrame，写入独立工作表「疑似麻友」
+        mahjong_stats_df: 可选的疑似麻友统计 DataFrame，写入独立工作表「疑似麻友-统计」
+        grp_df: 可选的群红包交易明细 DataFrame，写入独立工作表「群红包记录」
+        grp_stats_df: 可选的群红包统计 DataFrame，写入独立工作表「群红包-统计」
 
     Returns:
         输出文件路径
@@ -139,6 +164,24 @@ def write_excel(
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
+    # 清除 Excel 非法控制字符（否则 openpyxl 会抛 IllegalCharacterError）
+    _sanitize_for_excel(df)
+    if parking_df is not None and not parking_df.empty:
+        _sanitize_for_excel(parking_df)
+    if special_df is not None and not special_df.empty:
+        _sanitize_for_excel(special_df)
+    if mahjong_df is not None and not mahjong_df.empty:
+        _sanitize_for_excel(mahjong_df)
+    if mahjong_stats_df is not None and not mahjong_stats_df.empty:
+        _sanitize_for_excel(mahjong_stats_df)
+    if grp_df is not None and not grp_df.empty:
+        _sanitize_for_excel(grp_df)
+    if grp_stats_df is not None and not grp_stats_df.empty:
+        _sanitize_for_excel(grp_stats_df)
+
+    # 最终返回路径（默认 xlsx）
+    result_path = output_path
+
     try:
         with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
             # 写入主数据表
@@ -146,30 +189,84 @@ def write_excel(
             main_ws = writer.sheets[sheet_name]
             _format_worksheet(main_ws, df)
 
+            # ── 以下每个 sheet 独立 try-except，单个失败不影响其他 ──
+
             # 写入停车缴费工作表
             if parking_df is not None and not parking_df.empty:
-                parking_sheet_name = "停车缴费"
-                parking_df.to_excel(writer, index=False, sheet_name=parking_sheet_name)
-                parking_ws = writer.sheets[parking_sheet_name]
-                # 构建停车标黄 mask（车牌=无 且 备注含省份简称 → 提示人工复核）
-                from core.parking import build_parking_yellow_mask
-                yellow_mask = build_parking_yellow_mask(parking_df)
-                _format_worksheet(parking_ws, parking_df, yellow_mask=yellow_mask)
-                logger.info(f"停车缴费工作表已输出: {len(parking_df)} 条记录")
+                try:
+                    parking_sheet_name = "停车缴费"
+                    parking_df.to_excel(writer, index=False, sheet_name=parking_sheet_name)
+                    parking_ws = writer.sheets[parking_sheet_name]
+                    from core.parking import build_parking_yellow_mask
+                    yellow_mask = build_parking_yellow_mask(parking_df)
+                    _format_worksheet(parking_ws, parking_df, yellow_mask=yellow_mask)
+                    logger.info(f"停车缴费工作表已输出: {len(parking_df)} 条记录")
+                except Exception as _e:
+                    logger.error(f"停车缴费工作表写入失败: {_e}", exc_info=True)
 
             # 写入特殊交易工作表
             if special_df is not None and not special_df.empty:
-                special_sheet_name = "特殊交易"
-                special_df.to_excel(writer, index=False, sheet_name=special_sheet_name)
-                special_ws = writer.sheets[special_sheet_name]
-                _format_worksheet(special_ws, special_df)
-                logger.info(f"特殊交易工作表已输出: {len(special_df)} 条记录")
+                try:
+                    special_sheet_name = "特殊交易"
+                    special_df.to_excel(writer, index=False, sheet_name=special_sheet_name)
+                    special_ws = writer.sheets[special_sheet_name]
+                    _format_worksheet(special_ws, special_df)
+                    logger.info(f"特殊交易工作表已输出: {len(special_df)} 条记录")
+                except Exception as _e:
+                    logger.error(f"特殊交易工作表写入失败: {_e}", exc_info=True)
+
+            # 写入疑似麻友工作表（交易明细）
+            if mahjong_df is not None and not mahjong_df.empty:
+                try:
+                    mahjong_sheet_name = "疑似麻友"
+                    mahjong_df.to_excel(writer, index=False, sheet_name=mahjong_sheet_name)
+                    mahjong_ws = writer.sheets[mahjong_sheet_name]
+                    _format_worksheet(mahjong_ws, mahjong_df)
+                    logger.info(f"疑似麻友明细工作表已输出: {len(mahjong_df)} 条记录")
+                except Exception as _e:
+                    logger.error(f"疑似麻友明细工作表写入失败: {_e}", exc_info=True)
+
+            # 写入疑似麻友统计表（独立 sheet）
+            if mahjong_stats_df is not None and not mahjong_stats_df.empty:
+                try:
+                    stats_sheet_name = "疑似麻友-统计"
+                    mahjong_stats_df.to_excel(writer, index=False, sheet_name=stats_sheet_name)
+                    stats_ws = writer.sheets[stats_sheet_name]
+                    _format_worksheet(stats_ws, mahjong_stats_df)
+                    logger.info(f"疑似麻友统计工作表已输出: {len(mahjong_stats_df)} 个嫌疑人")
+                except Exception as _e:
+                    logger.error(f"疑似麻友统计工作表写入失败: {_e}", exc_info=True)
+
+            # 写入群红包记录工作表
+            if grp_df is not None and not grp_df.empty:
+                try:
+                    grp_sheet_name = "群红包记录"
+                    grp_df.to_excel(writer, index=False, sheet_name=grp_sheet_name)
+                    grp_ws = writer.sheets[grp_sheet_name]
+                    _format_worksheet(grp_ws, grp_df)
+                    logger.info(f"群红包记录工作表已输出: {len(grp_df)} 条记录")
+                except Exception as _e:
+                    logger.error(f"群红包记录工作表写入失败: {_e}", exc_info=True)
+
+            # 写入群红包统计工作表
+            if grp_stats_df is not None and not grp_stats_df.empty:
+                try:
+                    grp_stats_sheet_name = "群红包-统计"
+                    grp_stats_df.to_excel(writer, index=False, sheet_name=grp_stats_sheet_name)
+                    grp_stats_ws = writer.sheets[grp_stats_sheet_name]
+                    _format_worksheet(grp_stats_ws, grp_stats_df)
+                    logger.info(f"群红包统计工作表已输出: {len(grp_stats_df)} 个对手方")
+                except Exception as _e:
+                    logger.error(f"群红包统计工作表写入失败: {_e}", exc_info=True)
 
         logger.info(f"Excel 输出完成: {output_path}")
-        return output_path
+        return result_path
 
     except Exception as e:
-        logger.error(f"Excel 输出失败: {e}")
+        # 仅当「主 sheet」写入失败时才走到这里（子 sheet 错误已在上面独立处理）
+        import traceback
+        err_detail = traceback.format_exc()
+        logger.error(f"Excel 输出失败(主表): {e}\n{err_detail}")
         # fallback: 输出 CSV
         csv_path = output_path.replace('.xlsx', '.csv')
         df.to_csv(csv_path, index=False, encoding='utf-8-sig')

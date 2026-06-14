@@ -96,13 +96,20 @@ def main():
     merged = deduplicate(merged)
     after = len(merged)
 
-    # 3.5 停车缴费识别 + 特殊交易筛选
+    # 3.5 停车缴费识别 + 特殊交易筛选 + 疑似麻友识别 + 群红包识别
     analysis = post_merge_analysis(merged)
     parking_df = analysis["parking_df"]
     special_df = analysis["special_df"]
+    mahjong_df = analysis.get("mahjong_df")
+    mahjong_stats_df = analysis.get("mahjong_stats_df")
+    grp_df = analysis.get("grp_df")
+    grp_stats_df = analysis.get("grp_stats_df")
 
     # 4. 输出
-    write_excel(merged, args.output, parking_df=parking_df, special_df=special_df)
+    write_excel(merged, args.output,
+                parking_df=parking_df, special_df=special_df,
+                mahjong_df=mahjong_df, mahjong_stats_df=mahjong_stats_df,
+                grp_df=grp_df, grp_stats_df=grp_stats_df)
 
     elapsed = time.time() - start
 
@@ -114,6 +121,10 @@ def main():
     print(f"  合并后总计: {after} 行")
     if parking_df is not None:
         print(f"  停车缴费:   {len(parking_df)} 条")
+    if mahjong_stats_df is not None and len(mahjong_stats_df) > 0:
+        print(f"  疑似麻友:   {len(mahjong_stats_df)} 人, {len(mahjong_df)} 条记录")
+    if grp_stats_df is not None and len(grp_stats_df) > 0:
+        print(f"  群红包:     {len(grp_df)} 条记录, {len(grp_stats_df)} 个对手方")
     print(f"  输出文件:   {args.output}")
     print(f"  耗时:       {elapsed:.1f} 秒")
     print("=" * 60)
