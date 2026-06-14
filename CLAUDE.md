@@ -61,7 +61,7 @@ scripts/
 ├── app.py / app_merge.py       # CLI 入口（单批次交易 / 多批次合并）
 ├── app_reg.py                  # CLI 入口（注册信息提取合并）
 ├── gui_app.py                  # pywebview GUI 入口
-├── version.py                  # 单一版本号来源（VERSION = "4.1"），Python/前端/打包共享
+├── version.py                  # 单一版本号来源（VERSION = "4.2", AUTHOR = "钟建成"），Python/前端/打包共享
 ├── core/
 │   ├── reader.py               # txt 读取（交易流水），自动编码检测，空文件跳过
 │   ├── reg_reader.py           # txt 读取（注册信息），两区域格式 + 银行卡扩展行 + 账号不存在
@@ -292,7 +292,7 @@ React/Babel 的 `.js` 文件存放在 `webui/static/` 本地（通过 npm 安装
 - 仅处理 `.txt` 文件，忽略 `.xlsx`（src_ref 中的 xlsx 是旧脚本的二次产物，非原始数据）
 - `scripts/Tenpay_merge_v2.0.py` 是原始单文件脚本，保留作为参考
 - `requirements.txt` 位于项目根目录，记录所有直接依赖
-- **版本号**统一在 `scripts/version.py`（`VERSION = "4.1"`），所有入口（`app.py`/`app_merge.py`/`app_reg.py`/`gui_app.py`/`bridge.py`）从此动态读取，前端通过 `get_version()` API 获取。`.spec`/`index.html`/`style.css` 中的版本引用仅作注释，不参与构建逻辑
+- **版本号**统一在 `scripts/version.py`（`VERSION = "4.2"`, `AUTHOR = "钟建成"`），所有入口（`app.py`/`app_merge.py`/`app_reg.py`/`gui_app.py`/`bridge.py`）从此动态读取，前端通过 `get_version()` 和 `get_author()` API 获取。`.spec`/`index.html`/`style.css` 中的版本引用仅作注释，不参与构建逻辑
 - `.gitattributes` 强制 `*.sh` 和 `Dockerfile` 使用 LF 行尾，确保 Linux 容器兼容
 
 ## 打包构建
