@@ -110,7 +110,7 @@ def detect_group_red_packet_records(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.
                            lambda x: round(pd.to_numeric(x, errors='coerce').sum(), 2)),
         )
         .reset_index()
-        .sort_values('对手方接收金额元累计', ascending=False)
+        .sort_values('对手方收款次数', ascending=False)
     )
 
     # 重命名为最终输出列名

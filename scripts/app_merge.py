@@ -24,12 +24,12 @@ from utils.logger import setup_logger
 from core.merger import merge_dataframes, deduplicate
 from core.writer import write_excel
 from service.pipeline import post_merge_analysis
-from version import VERSION
+from version import VERSION, AUTHOR
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description=f"财付通交易流水处理工具 v{VERSION} — 多批次合并",
+        description=f"财付通交易流水处理工具 v{VERSION} — 多批次合并 · {AUTHOR}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
@@ -66,6 +66,7 @@ def main():
 
     logger.info("=" * 60)
     logger.info(f"财付通交易流水处理工具 v{VERSION}（多批次合并）")
+    logger.info(f"制作人: {AUTHOR}")
     logger.info(f"输入文件: {len(args.input)} 个")
     for i, f in enumerate(args.input, 1):
         logger.info(f"  [{i}] {f}")

@@ -41,6 +41,11 @@ class Api:
         from version import VERSION
         return VERSION
 
+    def get_author(self) -> str:
+        """返回工具制作人"""
+        from version import AUTHOR
+        return AUTHOR
+
     def select_folder(self) -> str:
         """打开文件夹选择对话框，返回所选路径（取消返回空字符串）"""
         if not _TKINTER_AVAILABLE:

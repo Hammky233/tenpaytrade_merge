@@ -19,12 +19,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from utils.logger import setup_logger
 from service.pipeline import TenpayPipeline
-from version import VERSION
+from version import VERSION, AUTHOR
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description=f"财付通交易流水处理工具 v{VERSION} — 单批次清洗",
+        description=f"财付通交易流水处理工具 v{VERSION} — 单批次清洗 · {AUTHOR}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
@@ -66,6 +66,7 @@ def main():
 
     logger.info("=" * 60)
     logger.info(f"财付通交易流水处理工具 v{VERSION}（单批次）")
+    logger.info(f"制作人: {AUTHOR}")
     logger.info(f"数据源: {args.source}")
     logger.info(f"输出: {os.path.join(args.output, args.name)}")
     logger.info("=" * 60)

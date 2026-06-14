@@ -25,6 +25,7 @@ from utils.logger import setup_logger
 from core.reg_reader import read_tenpay_reg_info
 from core.reg_processor import process_reg_data, build_person_info
 from core.writer import write_reg_excel
+from version import VERSION, AUTHOR
 
 
 def _find_reg_files(source_dir: str) -> list[str]:
@@ -48,7 +49,7 @@ def _find_reg_files(source_dir: str) -> list[str]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="财付通注册信息提取合并工具 — 遍历 TenpayRegInfo.txt 并合并输出 xlsx",
+        description=f"财付通注册信息提取合并工具 v{VERSION} — 遍历 TenpayRegInfo.txt 并合并输出 xlsx · {AUTHOR}",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
@@ -89,7 +90,8 @@ def main():
     logger = setup_logger(log_dir=log_dir)
 
     logger.info("=" * 60)
-    logger.info("财付通注册信息提取合并工具")
+    logger.info(f"财付通注册信息提取合并工具 v{VERSION}")
+    logger.info(f"制作人: {AUTHOR}")
     logger.info(f"数据源: {args.source}")
     logger.info(f"输出: {os.path.join(args.output, args.name)}")
     logger.info("=" * 60)
