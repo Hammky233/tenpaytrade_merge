@@ -1,4 +1,4 @@
-# CLAUDE.md
+﻿# CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -61,7 +61,7 @@ scripts/
 ├── app.py / app_merge.py       # CLI 入口（单批次交易 / 多批次合并）
 ├── app_reg.py                  # CLI 入口（注册信息提取合并）
 ├── gui_app.py                  # pywebview GUI 入口
-├── version.py                  # 单一版本号来源（VERSION = "4.2", AUTHOR = "钟建成"），Python/前端/打包共享
+├── version.py                  # 单一版本号来源（VERSION = "4.3", AUTHOR = "钟建成"），Python/前端/打包共享
 ├── core/
 │   ├── reader.py               # txt 读取（交易流水），自动编码检测，空文件跳过
 │   ├── reg_reader.py           # txt 读取（注册信息），两区域格式 + 银行卡扩展行 + 账号不存在
@@ -72,13 +72,14 @@ scripts/
 │   ├── special_filter.py       # 特殊交易筛选（情感数字/特殊日期/特殊备注）
 │   ├── mahjong.py              # 疑似麻友识别（晚间转账 + 自然人 + 跨日重复对手方）
 │   ├── group_red_packet.py      # 群红包识别（同日同时多人收款 + 对手方统计）
+│   ├── location.py              # 停车缴费地点识别（DeepSeek API 大模型提取，并发分块调用）
 │   └── writer.py               # Excel 输出 + 列宽自适应（支持停车缴费、特殊交易、疑似麻友、群红包、注册信息多 sheet）
 ├── config/
 │   ├── parking_config.json       # 停车识别配置（关键词、排除词、车牌省份简称）
 │   ├── time_period_config.json   # 时段分类配置（时段名称、起止时间）
 │   └── special_filter_config.json # 特殊交易筛选配置（金额模式、备注关键词、2/14开关）
 │   └── mahjong_config.json       # 疑似麻友识别配置（商户排除关键词、对手方数量范围、最少出现天数）
-├── service/pipeline.py         # 管道编排：遍历→读取→清洗→合并→去重→停车识别→特殊交易筛选→麻友识别→群红包识别→输出
+├── service/pipeline.py         # 管道编排：遍历→读取→清洗→合并→去重→停车识别→特殊交易筛选→麻友识别→群红包识别→地点识别→输出
 ├── utils/
 │   ├── columns.py              # 自适应列名识别（find_column / find_columns_containing）
 │   ├── clean_text.py           # 文本清洗工具
@@ -86,7 +87,7 @@ scripts/
 │   ├── paths.py                # 路径工具（兼容 PyInstaller）
 │   └── logger.py               # 日志（控制台 ANSI 颜色 + 文件）
 └── webui/
-    ├── bridge.py               # Python → JS API（文件选择、批处理、合并、注册信息清洗、停车/时段/特殊交易配置读写）
+    ├── bridge.py               # Python → JS API（文件选择、批处理、合并、注册信息清洗、停车/时段/配置读写、地点识别+重新提取）
     └── static/                 # React 前端（本地 JS，无 CDN 依赖）
 
 linux_build/                    # Linux Docker 本地打包（源码，已跟踪）
@@ -202,8 +203,8 @@ React/Babel 的 `.js` 文件存放在 `webui/static/` 本地（通过 npm 安装
 **输出**：Excel 新增「特殊交易」工作表，格式与汇总表一致（隐藏列、固定列宽、冻结表头）。空 DataFrame 时不创建该工作表。
 
 **管道覆盖**：
-- `pipeline.py` 单批次管道：去重后 → 停车识别 → 特殊交易筛选 → 麻友识别 → 群红包识别 → 输出
-- `bridge.py` 合并管道：去重后 → 时段分类 → 停车识别 → 特殊交易筛选 → 麻友识别 → 群红包识别 → 输出
+- `pipeline.py` 单批次管道：去重后 → 停车识别 → 地点识别（可选）→ 特殊交易筛选 → 麻友识别 → 群红包识别 → 输出
+- `bridge.py` 合并管道：去重后 → 时段分类 → 停车识别 → 地点识别（可选）→ 特殊交易筛选 → 麻友识别 → 群红包识别 → 输出
 
 ### 疑似麻友识别
 
@@ -257,6 +258,39 @@ React/Babel 的 `.js` 文件存放在 `webui/static/` 本地（通过 npm 安装
 - `bridge.py` 合并管道：同上
 - `app_merge.py` CLI 合并：同上
 
+### 停车缴费地点识别（AI）
+
+在停车缴费识别完成后，可选调用 DeepSeek 大模型（`deepseek-v4-pro`，硬编码）从「备注2」列提取地点信息，写入「地点」列（停车缴费工作表最右侧）。
+
+**启用方式**：GUI 单批次清洗/多批次合并页面勾选「启用地点识别（AI）」，填入 DeepSeek API Key。
+
+**核心实现**：`scripts/core/location.py`
+
+```python
+extract_locations(parking_df, api_key, existing_locations=None, progress_callback=None) → DataFrame
+```
+
+**识别流程**：
+1. 去重后的停车缴费 DataFrame，自适应找到「备注2」列
+2. 已有非"无"的地点值保留不覆盖（保护人工修正）
+3. 多批次合并时优先使用既往文件中的地点映射
+4. 收集唯一「备注2」值去重，分块并发调用 DeepSeek API
+5. LLM 返回 JSON 数组，解析后映射回 DataFrame
+
+**性能**：每块 ≤100 条去重备注，最多 8 线程并发。282 条去重备注 ≈ 3 块 → ~35 秒。
+
+**Prompt 策略**：7 种格式分类 + 30+ 正反 few-shot 示例，覆盖常见格式（地点-停车缴费-车牌、括号包裹、逗号分隔、"给XXX"付款等）。
+
+**安全设计**：
+- API Key 仅内存存储（`Api._api_key`），GUI 关闭即清空，不持久化
+- 模型硬编码 `deepseek-v4-pro`，不可更改
+
+**GUI 额外功能**：勾选后出现「重新提取地点」卡片，可对已有 Excel 的停车缴费 sheet 单独重跑地点提取，无需重新执行完整清洗流程。
+
+**管道覆盖**：
+- `pipeline.py` 单批次管道：停车识别后 → 地点识别（可选）→ 特殊交易筛选 → …
+- `bridge.py` 合并管道：同上，并读取既往停车缴费 sheet 的地点映射
+
 ### 注册信息提取合并
 
 `app_reg.py` 独立工具。遍历目录树中所有 `TenpayRegInfo.txt`，提取注册信息（账户状态、账号、姓名、身份证号、绑定手机等），合并去重后输出三 sheet Excel。
@@ -292,7 +326,7 @@ React/Babel 的 `.js` 文件存放在 `webui/static/` 本地（通过 npm 安装
 - 仅处理 `.txt` 文件，忽略 `.xlsx`（src_ref 中的 xlsx 是旧脚本的二次产物，非原始数据）
 - `scripts/Tenpay_merge_v2.0.py` 是原始单文件脚本，保留作为参考
 - `requirements.txt` 位于项目根目录，记录所有直接依赖
-- **版本号**统一在 `scripts/version.py`（`VERSION = "4.2"`, `AUTHOR = "钟建成"`），所有入口（`app.py`/`app_merge.py`/`app_reg.py`/`gui_app.py`/`bridge.py`）从此动态读取，前端通过 `get_version()` 和 `get_author()` API 获取。`.spec`/`index.html`/`style.css` 中的版本引用仅作注释，不参与构建逻辑
+- **版本号**统一在 `scripts/version.py`（`VERSION = "4.3"`, `AUTHOR = "钟建成"`），所有入口（`app.py`/`app_merge.py`/`app_reg.py`/`gui_app.py`/`bridge.py`）从此动态读取，前端通过 `get_version()` 和 `get_author()` API 获取。`.spec`/`index.html`/`style.css` 中的版本引用仅作注释，不参与构建逻辑
 - `.gitattributes` 强制 `*.sh` 和 `Dockerfile` 使用 LF 行尾，确保 Linux 容器兼容
 
 ## 打包构建

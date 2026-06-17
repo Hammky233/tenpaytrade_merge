@@ -19,9 +19,10 @@ logger = logging.getLogger("TenpayMerge")
 # 后处理分析（pipeline / CLI合并 / GUI合并 共享）
 # ============================================================================
 
-def post_merge_analysis(merged, progress=None) -> dict:
+def post_merge_analysis(merged, progress=None,
+                        api_key=None, existing_location_map=None) -> dict:
     """
-    在去重后的 DataFrame 上运行停车识别 + 特殊交易筛选。
+    在去重后的 DataFrame 上运行停车识别 + 特殊交易筛选 + 疑似麻友识别 + 群红包识别。
 
     被 pipeline.run()、bridge.py 合并路径、app_merge.py CLI 合并路径共享，
     确保三条执行路径行为一致。
@@ -29,10 +30,13 @@ def post_merge_analysis(merged, progress=None) -> dict:
     Args:
         merged: 去重后的 DataFrame
         progress: ProgressInfo 实例（可选），用于 GUI 日志
+        api_key: DeepSeek API Key（可选），非空时启用地点识别
+        existing_location_map: dict{备注2文本: 地点}（可选），多批次合并时恢复既往地点
 
     Returns:
         {"parking_df": DataFrame|None, "special_df": DataFrame|None,
-         "mahjong_df": DataFrame|None, "mahjong_stats_df": DataFrame|None}
+         "mahjong_df": DataFrame|None, "mahjong_stats_df": DataFrame|None,
+         "grp_df": DataFrame|None, "grp_stats_df": DataFrame|None}
     """
 
     def _log(msg: str):
@@ -55,6 +59,19 @@ def post_merge_analysis(merged, progress=None) -> dict:
     except Exception as e:
         logger.warning(f"停车缴费识别异常: {e}", exc_info=True)
         _log(f"⚠️ 停车缴费识别失败: {e}")
+
+    # --- 地点识别（停车缴费）---
+    if api_key and parking_df is not None and not parking_df.empty:
+        try:
+            from core.location import extract_locations
+            parking_df = extract_locations(
+                parking_df, api_key,
+                existing_locations=existing_location_map,
+                progress_callback=lambda msg: _log(msg),
+            )
+        except Exception as e:
+            logger.warning(f"地点提取异常: {e}", exc_info=True)
+            _log(f"⚠️ 地点提取失败: {e}")
 
     # --- 特殊交易筛选 ---
     special_df = None
@@ -150,11 +167,13 @@ class TenpayPipeline:
         output_dir: str,
         output_name: str = "Tenpay_merge.xlsx",
         log_dir: str | None = None,
+        api_key: str | None = None,
     ):
         self.source_dir = source_dir
         self.output_dir = output_dir
         self.output_name = output_name
         self.log_dir = log_dir or output_dir
+        self.api_key = api_key
         self.progress = ProgressInfo()
 
     def _find_txt_files(self) -> list[str]:
@@ -261,7 +280,7 @@ class TenpayPipeline:
         merged = deduplicate(merged)
 
         # 4.5 停车缴费识别 + 特殊交易筛选 + 疑似麻友识别 + 群红包识别（去重后进行）
-        analysis = post_merge_analysis(merged, self.progress)
+        analysis = post_merge_analysis(merged, self.progress, api_key=self.api_key)
         parking_df = analysis["parking_df"]
         special_df = analysis["special_df"]
         mahjong_df = analysis.get("mahjong_df")

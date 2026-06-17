@@ -35,6 +35,7 @@ class Api:
     def __init__(self):
         self._pipeline: TenpayPipeline | None = None
         self._thread: threading.Thread | None = None
+        self._api_key: str = ""  # 仅内存存储，GUI 关闭即清空
 
     def get_version(self) -> str:
         """返回当前版本号"""
@@ -97,7 +98,8 @@ class Api:
         return f"__ERROR__:{msg}"
 
     def start_batch_process(self, source: str, output: str, output_name: str = "Tenpay_merge.xlsx",
-                            process_reg: bool = False, timestamp: str = "") -> str:
+                            process_reg: bool = False, timestamp: str = "",
+                            enable_location: bool = False, api_key: str = "") -> str:
         """
         启动单批次处理（后台线程），返回 "started" 或错误信息
 
@@ -107,6 +109,8 @@ class Api:
             output_name: 交易流水输出文件名
             process_reg: 是否同时清洗注册信息（TenpayRegInfo.txt）
             timestamp: 时间戳（MMDD_HHmm 格式），用于文件名后缀
+            enable_location: 是否启用 AI 地点识别
+            api_key: DeepSeek API Key（仅内存保存，不持久化）
         """
         if self._thread and self._thread.is_alive():
             return "已有任务正在运行"
@@ -122,6 +126,7 @@ class Api:
             source_dir=source,
             output_dir=output,
             output_name=output_name,
+            api_key=api_key if enable_location else None,
         )
 
         def _run():
@@ -252,10 +257,13 @@ class Api:
             return self._pipeline.progress.to_dict()
         return {"status": "idle", "logs": []}
 
-    def start_merge_process(self, input_files_str: str, output: str) -> str:
+    def start_merge_process(self, input_files_str: str, output: str,
+                            enable_location: bool = False, api_key: str = "") -> str:
         """
         启动多批次合并（后台线程）
         input_files_str: 用 | 分隔的文件路径
+        enable_location: 是否启用 AI 地点识别
+        api_key: DeepSeek API Key
         """
         if self._thread and self._thread.is_alive():
             return "已有任务正在运行"
@@ -297,8 +305,38 @@ class Api:
                 merged = deduplicate(merged)
                 after = len(merged)
 
+                # ── 读取既往「停车缴费」sheet 中的地点映射 ──
+                existing_location_map = {}
+                if enable_location and api_key:
+                    from utils.columns import find_column as _find_col
+                    for f in files:
+                        try:
+                            xl = pd.ExcelFile(f)
+                            if "停车缴费" in xl.sheet_names:
+                                pf = pd.read_excel(f, sheet_name="停车缴费", dtype=str)
+                                # 确保有所需列
+                                col_n2 = _find_col(pf.columns, ["备注2"])
+                                col_loc = _find_col(pf.columns, ["地点"])
+                                if col_n2 and col_loc:
+                                    for _, row in pf.iterrows():
+                                        loc_val = str(row[col_loc]) if pd.notna(row[col_loc]) else ""
+                                        note_val = str(row[col_n2]) if pd.notna(row[col_n2]) else ""
+                                        if loc_val and loc_val != "无" and loc_val != "nan" and note_val:
+                                            # 保留第一个出现的地点映射
+                                            if note_val not in existing_location_map:
+                                                existing_location_map[note_val] = loc_val
+                            xl.close()
+                        except Exception:
+                            pass  # 单个文件读取失败不影响整体
+                    if existing_location_map:
+                        progress.add_log(f"从既往文件读取 {len(existing_location_map)} 条地点映射")
+
                 # 停车缴费识别 + 特殊交易筛选 + 疑似麻友识别 + 群红包识别（通过共享函数，与 pipeline 行为一致）
-                analysis = post_merge_analysis(merged)
+                analysis = post_merge_analysis(
+                    merged,
+                    api_key=api_key if enable_location else None,
+                    existing_location_map=existing_location_map if existing_location_map else None,
+                )
                 parking_df = analysis["parking_df"]
                 special_df = analysis["special_df"]
                 mahjong_df = analysis.get("mahjong_df")
@@ -405,3 +443,116 @@ class Api:
             return "ok"
         except Exception as e:
             return f"保存失败: {e}"
+
+    def re_extract_locations(self, excel_path: str, api_key: str) -> str:
+        """
+        对已有 Excel 文件的「停车缴费」sheet 独立重新提取地点。
+
+        - 只更新「停车缴费」sheet 的「地点」列，其他 sheet 原样保留
+        - 已有非"无"的地点值不覆盖（保护人工修正）
+
+        Returns: 成功时返回 JSON {"status": "ok", "total": N, "before": N, "after": N, "newly": N}
+                 失败时返回 JSON {"status": "error", "message": "..."}
+        """
+        import json
+
+        if not excel_path or not os.path.isfile(excel_path):
+            return json.dumps({"status": "error", "message": "文件不存在"}, ensure_ascii=False)
+        if not api_key:
+            return json.dumps({"status": "error", "message": "请先填入 API Key"}, ensure_ascii=False)
+
+        try:
+            from core.location import extract_locations
+            from utils.columns import find_column
+
+            # ── 1. 读取所有 sheet ──
+            all_sheets = pd.read_excel(excel_path, sheet_name=None, dtype=str)
+
+            if "停车缴费" not in all_sheets:
+                return json.dumps({
+                    "status": "error",
+                    "message": "该文件中未找到「停车缴费」工作表"
+                }, ensure_ascii=False)
+
+            parking_df = all_sheets["停车缴费"]
+
+            # ── 2. 确认「备注2」列存在 ──
+            col_note2 = find_column(parking_df.columns, ["备注2"])
+            if not col_note2:
+                return json.dumps({
+                    "status": "error",
+                    "message": "「停车缴费」sheet 中未找到「备注2」列"
+                }, ensure_ascii=False)
+
+            # ── 3. 统计前值 ──
+            before_count = 0
+            if "地点" in parking_df.columns:
+                before_count = int((
+                    parking_df["地点"].notna() &
+                    (parking_df["地点"] != "无") &
+                    (parking_df["地点"] != "")
+                ).sum())
+
+            # ── 4. 执行提取 ──
+            logs: list[str] = []
+
+            def _log_progress(msg: str):
+                import logging
+                logging.getLogger("TenpayMerge").info(msg)
+                logs.append(msg)
+
+            parking_df = extract_locations(
+                parking_df, api_key,
+                progress_callback=_log_progress,
+            )
+
+            after_count = int((
+                parking_df["地点"].notna() &
+                (parking_df["地点"] != "无") &
+                (parking_df["地点"] != "")
+            ).sum())
+
+            newly = after_count - before_count
+
+            # ── 5. 写回 Excel ──
+            all_sheets["停车缴费"] = parking_df
+
+            with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+                for sheet_name, sheet_df in all_sheets.items():
+                    sheet_df.to_excel(writer, index=False, sheet_name=sheet_name)
+
+            # ── 6. 重开文件应用格式 ──
+            from core.writer import _format_worksheet, _sanitize_for_excel
+            import openpyxl
+            _sanitize_for_excel(parking_df)
+            wb = openpyxl.load_workbook(excel_path)
+            if "停车缴费" in wb.sheetnames:
+                ws = wb["停车缴费"]
+                _format_worksheet(ws, parking_df)
+            wb.save(excel_path)
+            wb.close()
+
+            logs.append(
+                f"重新提取完成: {after_count}/{len(parking_df)} 条有地点信息"
+                f"（新增 {max(0, newly)} 条）"
+            )
+
+            return json.dumps({
+                "status": "ok",
+                "total": len(parking_df),
+                "before": before_count,
+                "after": after_count,
+                "newly": max(0, newly),
+                "logs": logs[-10:],
+            }, ensure_ascii=False)
+
+        except Exception as e:
+            import traceback
+            import logging
+            logging.getLogger("TenpayMerge").error(
+                f"重新提取地点失败: {e}\n{traceback.format_exc()}"
+            )
+            return json.dumps({
+                "status": "error",
+                "message": str(e),
+            }, ensure_ascii=False)

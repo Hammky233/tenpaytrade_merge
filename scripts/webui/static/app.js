@@ -71,6 +71,99 @@ function parseTime(timeStr) {
 
 // ========== 组件 ==========
 
+// --- 重新提取地点子组件 ---
+function ReExtractPanel({ apiKey }) {
+    const [reFile, setReFile] = useState("");
+    const [reRunning, setReRunning] = useState(false);
+    const [reResult, setReResult] = useState(null);  // {status, total, before, after, newly, logs, message}
+
+    const handleSelectFile = async () => {
+        const path = await callApi('select_file');
+        if (path) setReFile(path);
+    };
+
+    const handleReExtract = async () => {
+        if (!reFile || !apiKey) return;
+        setReRunning(true);
+        setReResult(null);
+        try {
+            const raw = await callApi('re_extract_locations', reFile, apiKey);
+            const result = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            setReResult(result);
+        } catch (e) {
+            setReResult({ status: "error", message: e.message || String(e) });
+        }
+        setReRunning(false);
+    };
+
+    const canRun = reFile && apiKey && !reRunning;
+
+    return (
+        <div>
+            <div className="form-row">
+                <span className="form-label">目标 Excel 文件</span>
+                <input
+                    className="form-input"
+                    value={reFile ? reFile.split('\\').pop().split('/').pop() : ''}
+                    readOnly
+                    placeholder="选择已有的输出 Excel..."
+                    style={{fontSize: 12}}
+                />
+                <button className="btn btn-secondary" onClick={handleSelectFile} disabled={reRunning}>
+                    选择
+                </button>
+            </div>
+            <div style={{display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 8}}>
+                <span style={{fontSize: 11, color: "var(--text-secondary)"}}>
+                    ⚡ 仅更新「地点」列，已有非"无"值不覆盖
+                </span>
+                <button
+                    className="btn btn-primary"
+                    onClick={handleReExtract}
+                    disabled={!canRun}
+                    title={!apiKey ? "请先在上方填入 API Key" : !reFile ? "请先选择 Excel 文件" : ""}
+                >
+                    {reRunning ? "⏳ 提取中..." : "🔄 开始提取"}
+                </button>
+            </div>
+
+            {/* 结果提示 */}
+            {reResult && (
+                <div style={{
+                    marginTop: 10, padding: "8px 12px", borderRadius: 4, fontSize: 12,
+                    background: reResult.status === "ok" ? "#f0fdf4" : "#fef2f2",
+                    color: reResult.status === "ok" ? "var(--success)" : "var(--danger)",
+                }}>
+                    {reResult.status === "ok" ? (
+                        <div>
+                            ✅ 提取完成：
+                            总计 {reResult.total} 条，
+                            原有 {reResult.before} 条地点，
+                            新增 {reResult.newly} 条，
+                            现有 {reResult.after} 条地点
+                        </div>
+                    ) : (
+                        <div>❌ {reResult.message || "提取失败"}</div>
+                    )}
+                </div>
+            )}
+
+            {/* 日志 */}
+            {reResult && reResult.logs && reResult.logs.length > 0 && (
+                <div style={{
+                    marginTop: 8, maxHeight: 160, overflowY: "auto",
+                    background: "#f9fafb", borderRadius: 4, padding: "6px 10px",
+                    fontSize: 11, fontFamily: "monospace", lineHeight: 1.5
+                }}>
+                    {reResult.logs.map((log, i) => (
+                        <div key={i} style={{color: "var(--text-secondary)"}}>{log}</div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
 // --- 单批次清洗 Tab ---
 function BatchTab() {
     // 组件挂载时生成时间戳，始终显示在文件名和勾选标签中
@@ -83,6 +176,8 @@ function BatchTab() {
     const [output, setOutput] = useState("");
     const [outputName, setOutputName] = useState(`Tenpay_merge_${initTs}.xlsx`);
     const [processReg, setProcessReg] = useState(true);
+    const [enableLocation, setEnableLocation] = useState(false);
+    const [apiKey, setApiKey] = useState("");
     const [status, setStatus] = useState({ status: "idle", logs: [] });
     const [running, setRunning] = useState(false);
     const timerRef = useRef(null);
@@ -124,7 +219,7 @@ function BatchTab() {
 
         setStatus({ status: "running", total: 0, current: 0, success: 0, fail: 0, skipped: 0, logs: [], result: {} });
         setRunning(true);
-        const result = await callApi('start_batch_process', source, output, finalName, processReg, newTs);
+        const result = await callApi('start_batch_process', source, output, finalName, processReg, newTs, enableLocation, apiKey);
         if (result !== "started") {
             setStatus(s => ({ ...s, status: "error", logs: [...s.logs, `❌ ${result}`] }));
             setRunning(false);
@@ -172,6 +267,64 @@ function BatchTab() {
                         <span style={{fontSize: 13}}>同时清洗注册信息 → <code style={{fontSize: 12}}>TenpayRegInfo_merge_{ts}.xlsx</code></span>
                     </label>
                 </div>
+                <div className="form-row">
+                    <label style={{display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none"}}>
+                        <input
+                            type="checkbox"
+                            checked={enableLocation}
+                            onChange={e => setEnableLocation(e.target.checked)}
+                            disabled={running}
+                            style={{width: 16, height: 16, cursor: "pointer"}}
+                        />
+                        <span style={{fontSize: 13}}>启用地点识别（AI） → 停车缴费「备注2」→「地点」</span>
+                    </label>
+                </div>
+                {enableLocation && (
+                    <div className="form-row">
+                        <span className="form-label">DeepSeek API Key</span>
+                        <input
+                            type="password"
+                            className="form-input"
+                            value={apiKey}
+                            onChange={e => setApiKey(e.target.value)}
+                            disabled={running}
+                            placeholder="sk-..."
+                            style={{fontFamily: "monospace"}}
+                        />
+                        <a href="https://platform.deepseek.com/api_keys"
+                           target="_blank"
+                           style={{fontSize: 11, color: "var(--primary)", whiteSpace: "nowrap"}}>
+                            📎 申请地址
+                        </a>
+                    </div>
+                )}
+                {enableLocation && (
+                    <div style={{
+                        fontSize: 11, color: "#b45309", lineHeight: 1.6,
+                        padding: "6px 10px", background: "#fffbeb",
+                        borderRadius: 4, marginTop: 4
+                    }}>
+                        ⚠️ 地点识别调用 DeepSeek API（deepseek-v4-pro），会产生少量费用。
+                        API Key 仅在本次会话内存中保存，关闭窗口后自动清除。
+                        提取结果供人工复核，不保证100%准确。
+                    </div>
+                )}
+                {enableLocation && (
+                    <div style={{
+                        borderTop: "1px solid var(--border)", marginTop: 16, paddingTop: 14
+                    }}>
+                        <div style={{
+                            fontSize: 13, fontWeight: 600, marginBottom: 10,
+                            display: "flex", alignItems: "center", gap: 6
+                        }}>
+                            📍 重新提取地点
+                            <span style={{fontSize: 11, color: "var(--text-secondary)", fontWeight: 400}}>
+                                对已有 Excel 的「停车缴费」sheet 单独重提
+                            </span>
+                        </div>
+                        <ReExtractPanel apiKey={apiKey} />
+                    </div>
+                )}
                 <div style={{textAlign: "center", marginTop: 12}}>
                     <button className="btn btn-primary btn-lg" onClick={handleStart}
                             disabled={running || !source || !output}>
@@ -250,6 +403,8 @@ function MergeTab() {
     const [inputFiles, setInputFiles] = useState([]);  // [{path, rows, cols, filename}]
     const [output, setOutput] = useState("");
     const [outputName, setOutputName] = useState("merged.xlsx");
+    const [enableLocation, setEnableLocation] = useState(false);
+    const [apiKey, setApiKey] = useState("");
     const [status, setStatus] = useState({ status: "idle", logs: [] });
     const [running, setRunning] = useState(false);
     const timerRef = useRef(null);
@@ -294,7 +449,7 @@ function MergeTab() {
         const filesStr = inputFiles.map(f => f.path).join("|");
         setRunning(true);
         setStatus({ status: "running", total: 0, current: 0, success: 0, fail: 0, skipped: 0, logs: [], result: {} });
-        const result = await callApi('start_merge_process', filesStr, fullOutput);
+        const result = await callApi('start_merge_process', filesStr, fullOutput, enableLocation, apiKey);
         if (result !== "started") {
             setStatus(s => ({ ...s, status: "error", logs: [...s.logs, `❌ ${result}`] }));
             setRunning(false);
@@ -348,6 +503,46 @@ function MergeTab() {
                         placeholder="merged.xlsx"
                     />
                 </div>
+                <div className="form-row">
+                    <label style={{display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none"}}>
+                        <input
+                            type="checkbox"
+                            checked={enableLocation}
+                            onChange={e => setEnableLocation(e.target.checked)}
+                            disabled={running}
+                            style={{width: 16, height: 16, cursor: "pointer"}}
+                        />
+                        <span style={{fontSize: 13}}>启用地点识别（AI） → 停车缴费「备注2」→「地点」</span>
+                    </label>
+                </div>
+                {enableLocation && (
+                    <div className="form-row">
+                        <span className="form-label">DeepSeek API Key</span>
+                        <input
+                            type="password"
+                            className="form-input"
+                            value={apiKey}
+                            onChange={e => setApiKey(e.target.value)}
+                            disabled={running}
+                            placeholder="sk-..."
+                            style={{fontFamily: "monospace"}}
+                        />
+                        <a href="https://platform.deepseek.com/api_keys"
+                           target="_blank"
+                           style={{fontSize: 11, color: "var(--primary)", whiteSpace: "nowrap"}}>
+                            📎 申请地址
+                        </a>
+                    </div>
+                )}
+                {enableLocation && (
+                    <div style={{
+                        fontSize: 11, color: "#b45309", lineHeight: 1.6,
+                        padding: "6px 10px", background: "#fffbeb",
+                        borderRadius: 4, marginTop: 4
+                    }}>
+                        ⚠️ 已有人工修正的地点值不会被覆盖，仅对缺失地点调用 API 提取。
+                    </div>
+                )}
                 <div style={{textAlign: "center", marginTop: 12}}>
                     <button className="btn btn-primary btn-lg" onClick={handleStart}
                             disabled={running || inputFiles.length === 0 || !output}>
