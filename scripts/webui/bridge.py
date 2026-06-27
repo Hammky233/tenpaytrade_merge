@@ -289,10 +289,23 @@ class Api:
                     progress.current = i + 1
                     fname = os.path.basename(f)
                     progress.add_log(f"读取: {fname}")
-                    df = pd.read_excel(f, dtype=str)
+                    try:
+                        df = pd.read_excel(f, sheet_name="财付通交易汇总", dtype=str)
+                    except ValueError as e:
+                        if "not found" in str(e) or "Worksheet named" in str(e):
+                            progress.add_log(f"❌ 文件缺少必要工作表「财付通交易汇总」: {fname}")
+                        else:
+                            progress.add_log(f"❌ 读取失败: {fname} — {e}")
+                        progress.fail += 1
+                        continue
                     dfs.append(df)
                     progress.add_log(f"  → {len(df)} 行")
                     progress.success += 1
+
+                if not dfs:
+                    progress.status = "error"
+                    progress.add_log("❌ 所有输入文件均缺少必要工作表「财付通交易汇总」，无法合并")
+                    return
 
                 progress.add_log("合并中...")
                 merged = merge_dataframes(dfs)
@@ -552,3 +565,4 @@ class Api:
                 "status": "error",
                 "message": str(e),
             }, ensure_ascii=False)
+

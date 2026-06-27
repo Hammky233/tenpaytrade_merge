@@ -1,39 +1,47 @@
-# 变更报告
+# 变更报告 — T002
 
 ## 变更的文件
 
 | 文件 | 变更类型 |
 |------|----------|
-| `tests/__init__.py` | 新增 |
-| `tests/conftest.py` | 新增 |
-| `tests/test_deduplicate.py` | 新增 |
-| `tests/test_split_datetime.py` | 新增 |
-| `tests/test_time_period.py` | 新增 |
-| `tests/test_writer.py` | 新增 |
-| `docs/03_TASKS.md` | 修改 |
+| `scripts/app_merge.py` | 修改 — 第 83 行增加 `sheet_name` 参数 + ValueError 处理 |
+| `scripts/webui/bridge.py` | 修改 — 第 292 行增加 `sheet_name` 参数；循环结束后增加 dfs 空检查提前退出 |
+| `tests/test_merge_reader.py` | 新增 — 4 个测试用例 |
+| `tests/test_compile.py` | 新增 — 编译检查，防止 GUI 入口语法错误漏检 |
+| `docs/CHANGE_REPORT.md` | 修改 — 本报告 |
 
 ## 变更摘要
 
-T005 建立最小自动化测试套件。新增 5 个测试文件、1 个 conftest 共享 fixture，覆盖 4 个核心函数。
+修复 CLI 和 GUI 多批次合并默认读取 Excel 第一个工作表的隐患，改为显式读取「财付通交易汇总」工作表。
 
-### 测试覆盖情况
+### 具体修改
 
-| 函数 | 文件 | 用例数 | 覆盖场景 |
-|------|------|--------|----------|
-| `deduplicate()` | `test_deduplicate.py` | 7 | 正常去重、群红包不误删、部分列缺失、空/单行DataFrame、全列fallback |
-| `split_datetime()` | `test_split_datetime.py` | 6 | 标准格式拆分、无秒格式、列插入位置、无时间列跳过、空DataFrame、空值 |
-| `classify_time_period()` | `test_time_period.py` | 15 | 边界时间(00:00/05:59/06:00/12:00/19:00/23:59/24:00)、正常时段、全角冒号、非法值、空值、幂等性、无时间列 |
-| `write_excel()` | `test_writer.py` | 7 | 空DataFrame、基本输出、隐藏列、辅助列隐藏、冻结表头、停车标黄、空附加工作表 |
+**`scripts/app_merge.py`（CLI 入口）：**
+- `pd.read_excel(filepath, dtype=str)` → `pd.read_excel(filepath, sheet_name="财付通交易汇总", dtype=str)`
+- 新增 `except ValueError` 分支，专门捕获工作表不存在的场景，输出清晰中文错误信息后 `sys.exit(1)`
+- 原 `except Exception` 保留作为其他异常的兜底
 
-### 测试数据
+**`scripts/webui/bridge.py`（GUI 入口）：**
+- `pd.read_excel(f, dtype=str)` → `pd.read_excel(f, sheet_name="财付通交易汇总", dtype=str)`
+- 新增内层 `try/except ValueError`，文件缺少目标工作表时写入日志、`progress.fail += 1` 并 `continue` 跳过该文件
+- **读取循环结束后增加 dfs 空检查**：如果所有文件均缺少目标工作表，设置 `progress.status = "error"`、输出清晰中文错误后 `return` 提前退出，避免以空数据误报「合并完成」
 
-全部使用内联构造的最小 DataFrame（每测试 ≤5 行），无真实敏感数据，无网络依赖。
+### 新增测试
 
-## 添加的测试
+**`tests/test_merge_reader.py`** — 4 个用例：
 
-详见上方"测试覆盖情况"。全部为新增 pytest 测试用例，共 35 个。
+| 测试 | 场景 | 验证点 |
+|------|------|--------|
+| `test_read_target_sheet_not_first` | 目标 sheet 在第二个位置 | 数据读取正确，不是第一个 sheet 的数据 |
+| `test_missing_target_sheet_raises` | 文件缺少目标 sheet | `pd.read_excel` 抛出 `ValueError` |
+| `test_sheet_at_first_position` | 目标 sheet 在第一个位置 | 行为与修改前一致（回归） |
+| `test_all_files_missing_target_gets_empty` | 所有文件均缺少目标 sheet | dfs 为空列表，merge 结果为空 DataFrame，write 返回空字符串 |
 
-（原计划预估 20 个用例，实际 35 个，因为时段分类测试增加了更多边界值覆盖。）
+**`tests/test_compile.py`** — 1 个用例：
+
+| 测试 | 覆盖 |
+|------|------|
+| `test_all_scripts_compile` | `py_compile` 检查 `scripts/` 下所有 `.py` 文件无语法错误 |
 
 ## 已执行的测试
 
@@ -42,14 +50,17 @@ cd /d C:\CCProject\tenpaytrade_merge
 .\.venv\Scripts\python -m pytest tests/ -v
 ```
 
-结果：**35 passed** in 0.90s。
+结果：**40 passed** in 0.85s。
 
 ## 已知风险
 
-无。测试目录完全独立，不修改任何现有业务代码。Excel 测试使用 `tempfile.TemporaryDirectory()` 自动清理。
+- `bridge.py` 中 progress.success/progress.fail 的计数逻辑：出错文件计入 fail，成功文件计入 success，总览计数与之前一致
+- 如果用户有极端旧版本文件（「财付通交易汇总」工作表名称不同），会触发错误提示，而非像之前那样静默读取第一个 sheet
+- `get_file_info()`（仅用于文件预览）与修改前行为一致，不指定 `sheet_name`
 
 ## 经验教训
 
-1. **openpyxl 颜色格式**：读取填充颜色时，存储格式为 `aarrggbb`（`00FFFF00`），而非写入时的 `rrggbb`（`FFFF00`）。测试断言需要注意这个差异。
-2. **测试发现的核心代码稳定性**：全部 35 个测试通过，说明当前 4 个核心函数的行为符合预期。
-3. **导入路径处理**：`conftest.py` 需要将 `scripts/` 加入 `sys.path`，测试时通过 `python -m pytest` 从项目根目录运行。
+1. `pd.read_excel` 的 `sheet_name` 参数在 `openpyxl` 引擎下找不到工作表时错误信息包含 `"not found"` 字串，但通过 `xlrd` 等其他引擎时格式可能不同——需要留意跨引擎兼容性。
+2. 两处修改（CLI 和 GUI）的模式不同：CLI 是收集阶段失败直接退出（`sys.exit(1)`），GUI 是跳过错误文件继续处理——这种差异是合理的，因为 GUI 是多文件批量处理，不应用一个文件的失败终止整个批次。
+3. GUI 全失败路径需要额外聚合检查：即使每个文件的错误都被逐个处理，仍需要在读取循环结束后检查是否有任何文件成功，否则空列表会一路传递到后续步骤，最终以空数据误报「合并完成」。
+4. 测试套件应增加编译检查（`py_compile`），避免 GUI 入口等不被其他测试导入的模块出现语法错误而漏检。使用 PowerShell 做文件内容替换时，`\n` 字面量和换行符容易混淆，操作后应通过编译验证确保文件有效。

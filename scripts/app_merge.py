@@ -80,9 +80,16 @@ def main():
     for filepath in args.input:
         logger.info(f"读取: {os.path.basename(filepath)}")
         try:
-            df = pd.read_excel(filepath, dtype=str)
+            df = pd.read_excel(filepath, sheet_name="财付通交易汇总", dtype=str)
             dfs.append(df)
             logger.info(f"  → {len(df)} 行, {len(df.columns)} 列")
+        except ValueError as e:
+            if "not found" in str(e) or "Worksheet named" in str(e):
+                logger.error(f"「财付通交易汇总」工作表不存在: {filepath}")
+                print(f"❌ 文件缺少必要工作表「财付通交易汇总」: {os.path.basename(filepath)}")
+            else:
+                logger.error(f"读取失败: {filepath} - {e}")
+            sys.exit(1)
         except Exception as e:
             logger.error(f"读取失败: {filepath} - {e}")
             sys.exit(1)
