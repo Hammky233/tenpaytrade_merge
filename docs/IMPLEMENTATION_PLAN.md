@@ -2,125 +2,137 @@
 
 ## 任务 ID
 
-T005
+T002
 
 ## 目标
 
-建立项目级 pytest 测试套件，覆盖核心清洗、去重、输出和高风险回归场景。
+修复 CLI 和 GUI 多批次合并默认读取 Excel 第一个工作表的问题，明确读取"财付通交易汇总"。当输入文件缺少该工作表时，返回清晰错误。
 
 ## 理解分析
 
-当前项目无任何测试文件存在。四个需要覆盖的核心函数在群红包场景（去重误删）、时间拆分、时段边界分类和 Excel 格式输出方面存在高风险回归路径。
+当前两个多批次合并入口均使用 `pd.read_excel(filepath)` 读取 Excel，默认只读取第一个工作表。当历史输出文件存在其他附加工作表（如"停车缴费""特殊交易"等）在"财付通交易汇总"之前时，会读错数据。
 
-依赖链分析：T005 没有上游依赖，但 T002/T003/T008 都依赖 T005，所以这是当前优先级最高的实现任务。
+具体定位：
 
-各函数的关键行为分析：
+1. **`scripts/app_merge.py` 第 83 行**：`pd.read_excel(filepath, dtype=str)` — 默认读取第一个 sheet，缺少 `sheet_name` 参数。
 
-1. **`deduplicate()`** (`scripts/core/merger.py`)：8 列联合主键去重。群红包场景下，同一天同一时间发出多个红包，只有对手方ID和对手方接收金额不同，其他 7 列完全一致，验证"对手方ID"加入去重键后不会误删这些记录。
+2. **`scripts/webui/bridge.py` 第 292 行**（`start_merge_process` 内部 `_run`）：`pd.read_excel(f, dtype=str)` — 同样默认读取第一个 sheet。
 
-2. **`split_datetime()`** (`scripts/core/processor.py`)：将"交易时间"列拆分为"日期"和"时间"。需要验证：标准格式拆分、列插入位置正确。
+3. **错误处理**：两处均没有针对"目标工作表不存在"的特殊处理。`pd.read_excel` 在 sheet 不存在时会抛 `ValueError`，当前被笼统的 `except Exception` 捕获，用户看到的提示不够精确。
 
-3. **`classify_time_period()`** (`scripts/core/processor.py`)：根据时间列分类到凌晨/早上/下午/晚上。需要验证：边界值（00:00、06:00、12:00、24:00 等）、全角冒号、非法时间值、幂等性。
+依赖关系：T002 依赖 T005（测试基础设施已就绪），可以添加测试验证本修复。
 
-4. **`write_excel()`** (`scripts/core/writer.py`)：Excel 输出格式化。需要验证：隐藏列（交易单号等）、辅助列（以 `_` 开头）、停车标黄（`build_parking_yellow_mask` 与 `write_excel` 的集成）。
+### 关键设计问题
+
+- `bridge.py` 第 305-323 行在读取既往文件地点映射时已经显式指定了 `sheet_name="停车缴费"`，说明代码中有显式读取指定 sheet 的先例。
+- `get_file_info()`（bridge.py 第 368 行）仅用于显示文件摘要信息（行数/列数），不是合并逻辑的一部分，按验收标准约束不在此次修复范围内。
 
 ## 预计变更的文件
 
 | 文件 | 变更类型 | 说明 |
 |------|----------|------|
-| `tests/__init__.py` | 新增 | 包标记 |
-| `tests/conftest.py` | 新增 | 共享 fixtures（示例 DataFrame 等） |
-| `tests/test_deduplicate.py` | 新增 | 去重测试 |
-| `tests/test_split_datetime.py` | 新增 | 时间拆分测试 |
-| `tests/test_time_period.py` | 新增 | 时段分类测试 |
-| `tests/test_writer.py` | 新增 | Excel 输出格式化测试 |
+| `scripts/app_merge.py` | 修改 — 1 行 | `pd.read_excel` 增加 `sheet_name="财付通交易汇总"` + ValueError 处理 |
+| `scripts/webui/bridge.py` | 修改 — 2 行 | 合并路径的 `pd.read_excel` 增加 `sheet_name` 参数 + 精确错误提示 |
+| `tests/test_merge_reader.py` | 新增 | 测试主工作表不在第一个位置的读取行为 |
 | `docs/03_TASKS.md` | 修改 | 状态更新 |
 
 ## 实现策略
 
-### 测试数据策略
+### 策略一：显式 sheet_name + 精确错误（代码修改）
 
-全部使用最小人工构造的 DataFrame，不使用真实交易数据。每条测试的 DataFrame 控制在 10 行以内（不含表头）。避免任何外部文件依赖。
+**`app_merge.py` 修改方案：**
 
-### 测试方案
+```python
+# 第 81-88 行，原代码：
+try:
+    df = pd.read_excel(filepath, dtype=str)
+    dfs.append(df)
+    logger.info(f"  → {len(df)} 行, {len(df.columns)} 列")
+except Exception as e:
+    logger.error(f"读取失败: {filepath} - {e}")
+    sys.exit(1)
 
-#### 1. test_deduplicate.py
-
-测试场景：
-- 正常去重：8 列完全一致的行 → 只保留 1 条
-- 部分列缺少时的降级去重
-- **群红包场景**：7 列相同、对手方ID 不同的 3 条记录 → 全部保留（不误删）
-- 空 DataFrame → 返回空
-- 单行 DataFrame → 不变
-
-#### 2. test_split_datetime.py
-
-测试场景：
-- 标准格式 `2026/4/2 14:30:00` → 日期 `2026/4/2`，时间 `14:30:00`
-- 列插入位置验证：在"交易用途类型"后面
-- 无"交易时间"列 → 跳过不报错
-
-#### 3. test_time_period.py
-
-测试场景：
-- 边界值：00:00 → 凌晨, 05:59 → 凌晨, 06:00 → 早上
-- 正常值：08:30 → 早上, 14:30 → 下午, 19:30 → 晚上
-- 全角冒号 `14：30` → 归一化为半角后分类正确
-- 非法值 `abc` → "未知"
-- 空/NaT → "未知"
-- 幂等性：已有"时段"列应跳过
-
-#### 4. test_writer.py
-
-测试场景：
-- 使用 `_format_worksheet` 验证隐藏列（交易单号、大单号等）被隐藏
-- 辅助列（以 `_` 开头）被隐藏
-- 停车标黄：构造含"车牌"和"_备注含省份简称"列的 parking_df，写入 Excel 后验证行被标黄
-- 空 DataFrame → 返回空字符串
-- 使用临时文件，测试后清理
-
-### 运行方式
-
-```bash
-cd /d C:\CCProject\tenpaytrade_merge
-python -m pytest tests/ -v
+# 修改为：
+try:
+    df = pd.read_excel(filepath, sheet_name="财付通交易汇总", dtype=str)
+    dfs.append(df)
+    logger.info(f"  → {len(df)} 行, {len(df.columns)} 列")
+except ValueError as e:
+    if "not found" in str(e) or "not exist" in str(e):
+        logger.error(f"「财付通交易汇总」工作表不存在: {filepath}")
+        print(f"❌ 文件缺少必要工作表「财付通交易汇总」: {os.path.basename(filepath)}")
+    else:
+        logger.error(f"读取失败: {filepath} - {e}")
+    sys.exit(1)
+except Exception as e:
+    logger.error(f"读取失败: {filepath} - {e}")
+    sys.exit(1)
 ```
 
-在 `docs/CHANGE_REPORT.md` 中记录此命令。
+**`bridge.py` 修改方案：**
+
+```python
+# 第 292 行，原代码：
+df = pd.read_excel(f, dtype=str)
+
+# 修改为：
+try:
+    df = pd.read_excel(f, sheet_name="财付通交易汇总", dtype=str)
+except ValueError as e:
+    if "not found" in str(e):
+        progress.add_log(f"❌ 文件缺少必要工作表「财付通交易汇总」: {fname}")
+    else:
+        progress.add_log(f"❌ 读取失败: {fname} — {e}")
+    progress.fail += 1
+    continue
+```
+
+注意检查 `continue` 之后的逻辑流是否安全（当前循环体内有 `progress.success += 1` 和后续操作，continue 将跳过这些）。
+
+### 策略二：测试方案（test_merge_reader.py）
+
+新增测试文件 `tests/test_merge_reader.py`，使用 `pd.ExcelWriter` + `openpyxl` 构造具有多工作表的临时 Excel 文件，其中"财付通交易汇总"不在第一个位置，验证：
+- 读取时指定 sheet_name 能正确读取目标工作表数据
+- 文件缺少该工作表时 `pd.read_excel` 抛 `ValueError`
+
+测试用例如下：
+- `test_read_target_sheet_not_first`：构造多 sheet Excel，"财付通交易汇总"在第二个位置，验证能正确读取
+- `test_missing_target_sheet_raises`：构造不含目标 sheet 的 Excel，验证抛出 ValueError
 
 ## 架构影响
 
-无。测试目录 `tests/` 是独立新增，不修改任何现有业务代码。配置层和工具层无需调整。
+无。仅修改两处 `pd.read_excel` 调用参数，不改变模块职责、不改变数据处理逻辑。
 
 ## 风险评估
 
 | 风险 | 概率 | 影响 | 缓解措施 |
 |------|------|------|----------|
-| write_excel 测试写入真实文件 | 高 | 低 | 使用 `tempfile.TemporaryDirectory`，测试后清理 |
-| classify_time_period 依赖配置文件 | 中 | 低 | 测试中显式传入配置字典，不依赖默认路径 |
-| 列名自适应匹配行为变更 | 低 | 中 | 测试使用 `find_column` 已匹配的列名 |
-| 测试文件目录导入路径问题 | 中 | 中 | conftest 中处理 PYTHONPATH，确保 `scripts/` 可导入 |
+| `bridge.py` 合并循环内 `continue` 跳过 `progress.success += 1` 逻辑 | 低 | 中 | 检查并确保 `continue` 前 progress 状态正确 |
+| 已有历史文件的"财付通交易汇总"工作表名称不一致 | 低 | 低 | 当前版本输出的文件名称一致，只影响超旧版本；不兼容时可回退 |
 
 ## 测试策略
 
-详见"实现策略"部分，按函数维度覆盖。
+- 新增 `tests/test_merge_reader.py`（集成测试，真正读写 Excel 文件）
+- 使用 `tempfile.TemporaryDirectory` 自动清理
+- 已存在的 35 个测试不变
 
 ## 考虑的替代方案
 
-1. **使用 CSV 而非测试框架**：不采用。pytest 是项目实际需要的最小测试基础设施，且后续所有任务（T002、T003、T008）都依赖 T005。
-2. **测试数据从文件读取**：不采用。全部使用内联 DataFrame 构造，零外部依赖，更清晰且可维护。
+1. **从文件名推断 sheet 名称**：不可靠，放弃。
+2. **遍历 sheet 列表找到匹配名称**：`pd.read_excel` 本身已支持 `sheet_name` 参数，无需手动遍历。
+3. **保持读取第一个 sheet 但增加警告日志**：不符合验收标准"显式读取"要求。
 
 ## 决策一致性
 
-- 遵守了"测试数据必须是最小人工样例，不使用真实敏感数据"的约束。
-- 不引入额外框架，仅使用 pytest + pandas。
-- 不依赖网络。
+- 符合 ADR-002（CLI 与 GUI 共享核心处理管道），两处修改行为一致。
+- 符合 ADR-004（自适应列名），这里不改变列识别，只改变工作表选取。
+- 符合约束"不改变输出工作表命名"。
 
 ## 预估范围
 
 | 维度 | 预估 |
 |------|------|
-| 新增文件 | 6 个 |
-| 测试用例数 | ~20 个 |
-| 测试代码行 | ~400 行 |
-| 测试数据行 | 全部内联构造，< 50 行 |
+| 修改文件 | 2 个 |
+| 新增文件 | 1 个（测试） |
+| 变更代码行 | ~15 行 |
+| 新增测试用例 | 2 个 |
