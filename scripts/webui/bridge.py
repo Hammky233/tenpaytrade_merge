@@ -180,12 +180,8 @@ class Api:
         _log("📋 开始清洗注册信息...")
 
         # 1. 扫描 TenpayRegInfo.txt 文件
-        reg_files = []
-        for root, dirs, filenames in os.walk(source):
-            for fn in filenames:
-                if fn == "TenpayRegInfo.txt":
-                    reg_files.append(os.path.join(root, fn))
-        reg_files.sort()
+        from utils.paths import find_files_by_name
+        reg_files = find_files_by_name(source, "TenpayRegInfo.txt")
 
         if not reg_files:
             _log("⚠️ 未找到 TenpayRegInfo.txt 文件，跳过注册信息清洗")

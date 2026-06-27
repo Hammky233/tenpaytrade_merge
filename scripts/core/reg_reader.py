@@ -11,6 +11,8 @@
 import os
 import re
 import logging
+from utils.text_utils import normalize_row_parts
+from utils.encoding import detect_and_read_lines
 
 logger = logging.getLogger("TenpayMerge")
 
@@ -25,17 +27,8 @@ BANK_CARD_EMPTY_COLS = 6  # 账户状态~绑定手机 这6列在银行卡行中�
 
 
 def _detect_encoding_and_read(filepath: str) -> list[str] | None:
-    """
-    自动检测编码并读取文件所有行。
-    策略：UTF-8 → GBK → GB2312 → UTF-16
-    """
-    for encoding in ['utf-8', 'gbk', 'gb2312', 'utf-16']:
-        try:
-            with open(filepath, 'r', encoding=encoding, errors='replace') as f:
-                return f.readlines()
-        except (UnicodeDecodeError, UnicodeError):
-            continue
-    return None
+    """自动检测编码并读取文件所有行（委托至统一工具函数）"""
+    return detect_and_read_lines(filepath)
 
 
 def _try_parse_not_found(lines: list[str], filepath: str) -> dict | None:
@@ -122,13 +115,8 @@ def _parse_basic_section(lines: list[str]) -> dict:
 
         parts = line.split('\t')
 
-        # 补齐或截断列
-        if len(parts) > expected_cols:
-            # 多余列合并到最后一列（遵循 reader.py 的约定）
-            extra = '\t'.join(parts[expected_cols - 1:])
-            parts = parts[:expected_cols - 1] + [extra]
-        elif len(parts) < expected_cols:
-            parts.extend([''] * (expected_cols - len(parts)))
+        # 标准化列数
+        parts = normalize_row_parts(parts, expected_cols)
 
         # 判断是主记录行还是银行卡扩展行
         # 前 BANK_CARD_EMPTY_COLS 列全为空 → 银行卡扩展行
@@ -183,11 +171,7 @@ def _parse_change_section(lines: list[str]) -> dict:
         if all(p.strip() == '' for p in parts):
             continue
 
-        if len(parts) > expected_cols:
-            extra = '\t'.join(parts[expected_cols - 1:])
-            parts = parts[:expected_cols - 1] + [extra]
-        elif len(parts) < expected_cols:
-            parts.extend([''] * (expected_cols - len(parts)))
+        parts = normalize_row_parts(parts, expected_cols)
 
         # 跳过完全为空的行
         if any(p.strip() != '' for p in parts):

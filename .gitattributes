@@ -1,4 +1,2 @@
-# Shell 脚本和 Docker 文件强制 LF 行尾（Linux 兼容）
+# Unix 脚本强制 LF 行尾
 *.sh       text eol=lf
-Dockerfile text eol=lf
-.dockerignore text eol=lf

@@ -36,3 +36,25 @@ def get_config_dir() -> str:
         scripts/config/ 目录的绝对路径
     """
     return os.path.join(get_scripts_dir(), 'config')
+
+
+def find_files_by_name(source_dir: str, filename: str) -> list[str]:
+    """
+    递归扫描 source_dir 下所有文件名为 filename 的文件。
+
+    结果按路径排序，确保确定性输出。
+
+    Args:
+        source_dir: 扫描根目录
+        filename: 目标文件名（精确匹配），如 "TenpayTrades.txt"
+
+    Returns:
+        文件路径列表（按路径排序）
+    """
+    files = []
+    for root, dirs, filenames in os.walk(source_dir):
+        for fn in filenames:
+            if fn == filename:
+                files.append(os.path.join(root, fn))
+    files.sort()
+    return files

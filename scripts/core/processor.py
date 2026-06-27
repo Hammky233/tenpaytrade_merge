@@ -18,6 +18,7 @@ import re
 import pandas as pd
 from utils.columns import find_column, find_columns_containing
 from utils.clean_text import _SPECIAL_CHARS_REGEX as _SC_REGEX
+from utils.time_utils import time_to_minutes
 
 logger = logging.getLogger("TenpayMerge")
 
@@ -123,7 +124,7 @@ def convert_amounts(df: pd.DataFrame) -> pd.DataFrame:
     if col_balance and col_balance not in rename_map:
         try:
             df[col_balance] = df[col_balance].astype(str).str.strip()
-            df[col_balance] = df[col_balance].str.replace(r'[‌‎‪‬​‍﻿]', '', regex=True)
+            df[col_balance] = df[col_balance].str.replace(_SC_REGEX, '', regex=True)
             df[col_balance] = pd.to_numeric(df[col_balance], errors='coerce').fillna(0) / 100
             if '(分)' in col_balance:
                 new_name = col_balance.replace('(分)', '(元)')
@@ -295,30 +296,6 @@ def load_time_period_config(config_path: str | None = None) -> dict:
     })
 
 
-def _time_to_minutes(time_str: str) -> int:
-    """
-    将时间字符串 (HH:MM 或 HH:MM:SS) 转为分钟数。
-
-    Args:
-        time_str: 时间字符串
-
-    Returns:
-        分钟数 (0~1439)，解析失败返回 -1
-    """
-    if pd.isna(time_str) or not isinstance(time_str, str):
-        return -1
-    try:
-        # 归一化冒号：全角冒号（中文输入法）→ 半角冒号
-        cleaned = str(time_str).strip().replace('：', ':')
-        parts = cleaned.split(':')
-        if len(parts) < 2:
-            return -1
-        h, m = int(parts[0]), int(parts[1])
-        return h * 60 + m
-    except (ValueError, IndexError):
-        return -1
-
-
 def classify_time_period(df: pd.DataFrame, config: dict | None = None) -> pd.DataFrame:
     """
     根据"时间"列将交易分类到对应时段，新增"时段"列在最右侧。
@@ -357,8 +334,8 @@ def classify_time_period(df: pd.DataFrame, config: dict | None = None) -> pd.Dat
     # 预计算每个时段的分钟范围
     period_ranges = []
     for p in periods:
-        start_min = _time_to_minutes(p.get("start", ""))
-        end_min = _time_to_minutes(p.get("end", ""))
+        start_min = time_to_minutes(p.get("start", ""))
+        end_min = time_to_minutes(p.get("end", ""))
         # 处理 24:00 → 1440 分钟，用于 < 比较
         if p.get("end", "") == "24:00":
             end_min = 1440
@@ -366,7 +343,7 @@ def classify_time_period(df: pd.DataFrame, config: dict | None = None) -> pd.Dat
 
     def _classify(time_val):
         """对单个时间值进行分类"""
-        minutes = _time_to_minutes(time_val)
+        minutes = time_to_minutes(time_val)
         if minutes < 0:
             return "未知"
         for name, start_min, end_min in period_ranges:

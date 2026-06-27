@@ -11,6 +11,8 @@
 import os
 import logging
 import pandas as pd
+from utils.text_utils import normalize_row_parts
+from utils.encoding import detect_and_read_lines
 
 logger = logging.getLogger("TenpayMerge")
 
@@ -37,15 +39,8 @@ def read_tenpay_trades(filepath: str) -> pd.DataFrame | None:
     except OSError:
         pass
 
-    # 尝试多种编码读取
-    content = None
-    for encoding in ['utf-8', 'gbk', 'gb2312', 'utf-16']:
-        try:
-            with open(filepath, 'r', encoding=encoding, errors='replace') as f:
-                content = f.readlines()
-            break
-        except (UnicodeDecodeError, UnicodeError):
-            continue
+    # 自动检测编码并读取
+    content = detect_and_read_lines(filepath)
 
     if content is None:
         logger.error(f"无法识别编码: {filepath}")
@@ -77,13 +72,8 @@ def read_tenpay_trades(filepath: str) -> pd.DataFrame | None:
         if len(parts) == len(header) and parts == header:
             continue
 
-        # 列数溢出：合并多余列到最后一列
-        if len(parts) > expected_cols:
-            extra = '\t'.join(parts[expected_cols - 1:])
-            parts = parts[:expected_cols - 1] + [extra]
-        # 列数不足：补空
-        elif len(parts) < expected_cols:
-            parts.extend([''] * (expected_cols - len(parts)))
+        # 标准化列数（溢出合并、不足补齐）
+        parts = normalize_row_parts(parts, expected_cols)
 
         data_rows.append(parts)
 

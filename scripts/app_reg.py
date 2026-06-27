@@ -29,22 +29,9 @@ from version import VERSION, AUTHOR
 
 
 def _find_reg_files(source_dir: str) -> list[str]:
-    """
-    递归扫描 source_dir 下所有名为 TenpayRegInfo.txt 的文件。
-
-    Args:
-        source_dir: 根目录
-
-    Returns:
-        文件路径列表（按路径排序）
-    """
-    files = []
-    for root, dirs, filenames in os.walk(source_dir):
-        for f in filenames:
-            if f == 'TenpayRegInfo.txt':
-                files.append(os.path.join(root, f))
-    files.sort()
-    return files
+    """递归扫描 source_dir 下所有 TenpayRegInfo.txt 文件（按路径排序）"""
+    from utils.paths import find_files_by_name
+    return find_files_by_name(source_dir, "TenpayRegInfo.txt")
 
 
 def main():

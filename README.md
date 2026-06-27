@@ -40,18 +40,6 @@ python scripts/app_merge.py -i batch1.xlsx batch2.xlsx -o merged.xlsx
 python scripts/gui_app.py
 ```
 
-### Linux
-
-CI 自动构建 Linux 可执行文件（GLIBC 2.31 兼容），从 [Actions](https://github.com/Hammky233/tenpaytrade_merge/actions) 页面下载 `tenpaytrade-linux` artifact：
-
-```bash
-chmod +x 启动工具.sh tenpaytrade tenpaytrade-merge tenpaytrade-gui
-./启动工具.sh   # GUI 模式（需要 GTK3 + WebKit2）
-./tenpaytrade -s 数据目录 -o 输出目录   # CLI 模式（无需桌面环境）
-```
-
-详细使用指南见 [`docs/linux_usage_guide.md`](docs/linux_usage_guide.md)。
-
 ## 📂 数据目录结构
 
 ```
@@ -126,8 +114,7 @@ scripts/
 | pywebview | 桌面 GUI 窗口 |
 | React + Babel | GUI 前端（零外部依赖） |
 | chinesecalendar | 节假日判断 |
-| PyInstaller | 打包 exe / Linux 可执行文件 |
-| GitHub Actions | CI 自动构建 Linux 二进制文件 |
+| PyInstaller | 打包 exe |
 
 ## 📦 本地打包
 

@@ -127,6 +127,20 @@ def _format_worksheet(
             worksheet.column_dimensions[column_letter].hidden = True
 
 
+def _write_extra_sheet(writer, df: pd.DataFrame, sheet_name: str,
+                       yellow_mask=None, log_label: str = ""):
+    """将 DataFrame 写入额外工作表并应用格式（含异常保护）。"""
+    if df is None or df.empty:
+        return
+    try:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+        ws = writer.sheets[sheet_name]
+        _format_worksheet(ws, df, yellow_mask=yellow_mask)
+        logger.info(f"{log_label}工作表已输出: {len(df)} 条记录")
+    except Exception as e:
+        logger.error(f"{log_label}工作表写入失败: {e}", exc_info=True)
+
+
 def write_excel(
     df: pd.DataFrame,
     output_path: str,
@@ -166,18 +180,9 @@ def write_excel(
 
     # 清除 Excel 非法控制字符（否则 openpyxl 会抛 IllegalCharacterError）
     _sanitize_for_excel(df)
-    if parking_df is not None and not parking_df.empty:
-        _sanitize_for_excel(parking_df)
-    if special_df is not None and not special_df.empty:
-        _sanitize_for_excel(special_df)
-    if mahjong_df is not None and not mahjong_df.empty:
-        _sanitize_for_excel(mahjong_df)
-    if mahjong_stats_df is not None and not mahjong_stats_df.empty:
-        _sanitize_for_excel(mahjong_stats_df)
-    if grp_df is not None and not grp_df.empty:
-        _sanitize_for_excel(grp_df)
-    if grp_stats_df is not None and not grp_stats_df.empty:
-        _sanitize_for_excel(grp_stats_df)
+    for extra_df in (parking_df, special_df, mahjong_df, mahjong_stats_df, grp_df, grp_stats_df):
+        if extra_df is not None and not extra_df.empty:
+            _sanitize_for_excel(extra_df)
 
     # 最终返回路径（默认 xlsx）
     result_path = output_path
@@ -192,72 +197,25 @@ def write_excel(
             # ── 以下每个 sheet 独立 try-except，单个失败不影响其他 ──
 
             # 写入停车缴费工作表
-            if parking_df is not None and not parking_df.empty:
-                try:
-                    parking_sheet_name = "停车缴费"
-                    parking_df.to_excel(writer, index=False, sheet_name=parking_sheet_name)
-                    parking_ws = writer.sheets[parking_sheet_name]
-                    from core.parking import build_parking_yellow_mask
-                    yellow_mask = build_parking_yellow_mask(parking_df)
-                    _format_worksheet(parking_ws, parking_df, yellow_mask=yellow_mask)
-                    logger.info(f"停车缴费工作表已输出: {len(parking_df)} 条记录")
-                except Exception as _e:
-                    logger.error(f"停车缴费工作表写入失败: {_e}", exc_info=True)
+            from core.parking import build_parking_yellow_mask
+            _write_extra_sheet(writer, parking_df, "停车缴费",
+                               yellow_mask=build_parking_yellow_mask(parking_df) if parking_df is not None and not parking_df.empty else None,
+                               log_label="停车缴费")
 
             # 写入特殊交易工作表
-            if special_df is not None and not special_df.empty:
-                try:
-                    special_sheet_name = "特殊交易"
-                    special_df.to_excel(writer, index=False, sheet_name=special_sheet_name)
-                    special_ws = writer.sheets[special_sheet_name]
-                    _format_worksheet(special_ws, special_df)
-                    logger.info(f"特殊交易工作表已输出: {len(special_df)} 条记录")
-                except Exception as _e:
-                    logger.error(f"特殊交易工作表写入失败: {_e}", exc_info=True)
+            _write_extra_sheet(writer, special_df, "特殊交易", log_label="特殊交易")
 
             # 写入疑似麻友工作表（交易明细）
-            if mahjong_df is not None and not mahjong_df.empty:
-                try:
-                    mahjong_sheet_name = "疑似麻友"
-                    mahjong_df.to_excel(writer, index=False, sheet_name=mahjong_sheet_name)
-                    mahjong_ws = writer.sheets[mahjong_sheet_name]
-                    _format_worksheet(mahjong_ws, mahjong_df)
-                    logger.info(f"疑似麻友明细工作表已输出: {len(mahjong_df)} 条记录")
-                except Exception as _e:
-                    logger.error(f"疑似麻友明细工作表写入失败: {_e}", exc_info=True)
+            _write_extra_sheet(writer, mahjong_df, "疑似麻友", log_label="疑似麻友明细")
 
             # 写入疑似麻友统计表（独立 sheet）
-            if mahjong_stats_df is not None and not mahjong_stats_df.empty:
-                try:
-                    stats_sheet_name = "疑似麻友-统计"
-                    mahjong_stats_df.to_excel(writer, index=False, sheet_name=stats_sheet_name)
-                    stats_ws = writer.sheets[stats_sheet_name]
-                    _format_worksheet(stats_ws, mahjong_stats_df)
-                    logger.info(f"疑似麻友统计工作表已输出: {len(mahjong_stats_df)} 个嫌疑人")
-                except Exception as _e:
-                    logger.error(f"疑似麻友统计工作表写入失败: {_e}", exc_info=True)
+            _write_extra_sheet(writer, mahjong_stats_df, "疑似麻友-统计", log_label="疑似麻友统计")
 
             # 写入群红包记录工作表
-            if grp_df is not None and not grp_df.empty:
-                try:
-                    grp_sheet_name = "群红包记录"
-                    grp_df.to_excel(writer, index=False, sheet_name=grp_sheet_name)
-                    grp_ws = writer.sheets[grp_sheet_name]
-                    _format_worksheet(grp_ws, grp_df)
-                    logger.info(f"群红包记录工作表已输出: {len(grp_df)} 条记录")
-                except Exception as _e:
-                    logger.error(f"群红包记录工作表写入失败: {_e}", exc_info=True)
+            _write_extra_sheet(writer, grp_df, "群红包记录", log_label="群红包记录")
 
             # 写入群红包统计工作表
-            if grp_stats_df is not None and not grp_stats_df.empty:
-                try:
-                    grp_stats_sheet_name = "群红包-统计"
-                    grp_stats_df.to_excel(writer, index=False, sheet_name=grp_stats_sheet_name)
-                    grp_stats_ws = writer.sheets[grp_stats_sheet_name]
-                    _format_worksheet(grp_stats_ws, grp_stats_df)
-                    logger.info(f"群红包统计工作表已输出: {len(grp_stats_df)} 个对手方")
-                except Exception as _e:
-                    logger.error(f"群红包统计工作表写入失败: {_e}", exc_info=True)
+            _write_extra_sheet(writer, grp_stats_df, "群红包-统计", log_label="群红包统计")
 
         logger.info(f"Excel 输出完成: {output_path}")
         return result_path

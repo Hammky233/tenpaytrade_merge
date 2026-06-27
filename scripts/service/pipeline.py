@@ -178,12 +178,8 @@ class TenpayPipeline:
 
     def _find_txt_files(self) -> list[str]:
         """递归查找所有 TenpayTrades.txt 文件"""
-        files = []
-        for root, dirs, filenames in os.walk(self.source_dir):
-            for fn in filenames:
-                if fn == "TenpayTrades.txt":
-                    files.append(os.path.join(root, fn))
-        return files
+        from utils.paths import find_files_by_name
+        return find_files_by_name(self.source_dir, "TenpayTrades.txt")
 
     def _short_path(self, filepath: str) -> str:
         """生成短路径用于日志显示（取最后3级目录+文件名）"""

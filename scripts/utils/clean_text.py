@@ -28,13 +28,6 @@ def clean_special_chars(text: str) -> str:
     return text
 
 
-def clean_special_chars_str(text: str) -> str:
-    """
-    用正则移除字符串中的所有特殊字符。
-    性能优于逐个字符替换，适合批量调用。
-    """
-    return _SPECIAL_CHARS_REGEX.sub('', text)
-
 
 def clean_special_chars_series(series):
     """
