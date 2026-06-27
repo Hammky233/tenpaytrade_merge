@@ -1,6 +1,6 @@
 # 任务台账
 
-本文档记录由架构与审查代理拆分出的实现任务。实现代理应按任务 ID 创建 `docs/IMPLEMENTATION_PLAN.md`，获得批准后再修改代码。
+本文档是四文档唯一事实来源体系的一部分（另见 `docs/00_REQUIREMENTS.md`、`docs/01_ARCHITECTURE.md`、`docs/02_DECISIONS.md`），记录由架构与审查代理拆分出的实现任务。实现代理应按任务 ID 创建 `docs/IMPLEMENTATION_PLAN.md`，获得批准后再修改代码。
 
 ## 状态说明
 
@@ -19,7 +19,7 @@
 
 状态：
 
-实施计划已批准
+已完成
 
 优先级：
 
