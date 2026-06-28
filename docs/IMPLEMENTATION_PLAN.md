@@ -2,137 +2,171 @@
 
 ## 任务 ID
 
-T002
+T003
 
 ## 目标
 
-修复 CLI 和 GUI 多批次合并默认读取 Excel 第一个工作表的问题，明确读取"财付通交易汇总"。当输入文件缺少该工作表时，返回清晰错误。
+修复 GUI「重新提取地点」功能在写回 Excel 时破坏所有工作表格式的问题。重新提取地点后，其他工作表的隐藏列、冻结窗格、列宽应原样保留；「停车缴费」工作表中非「地点」列的数据和单元格样式也应保持不变。
 
 ## 理解分析
 
-当前两个多批次合并入口均使用 `pd.read_excel(filepath)` 读取 Excel，默认只读取第一个工作表。当历史输出文件存在其他附加工作表（如"停车缴费""特殊交易"等）在"财付通交易汇总"之前时，会读错数据。
+### 问题根因
 
-具体定位：
+`scripts/webui/bridge.py: re_extract_locations()` 第 529–541 行的写回逻辑：
 
-1. **`scripts/app_merge.py` 第 83 行**：`pd.read_excel(filepath, dtype=str)` — 默认读取第一个 sheet，缺少 `sheet_name` 参数。
+```python
+with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+    for sheet_name, sheet_df in all_sheets.items():
+        sheet_df.to_excel(writer, index=False, sheet_name=sheet_name)
+```
 
-2. **`scripts/webui/bridge.py` 第 292 行**（`start_merge_process` 内部 `_run`）：`pd.read_excel(f, dtype=str)` — 同样默认读取第一个 sheet。
+`pd.ExcelWriter` 内部调用 `openpyxl.Workbook()` 创建**全新文件**，逐 sheet 写入只写数据，不携带任何格式。后续仅对「停车缴费」调用 `_format_worksheet` 恢复格式，其他 sheet 全部丢失格式化状态。
 
-3. **错误处理**：两处均没有针对"目标工作表不存在"的特殊处理。`pd.read_excel` 在 sheet 不存在时会抛 `ValueError`，当前被笼统的 `except Exception` 捕获，用户看到的提示不够精确。
+### 修正方向
 
-依赖关系：T002 依赖 T005（测试基础设施已就绪），可以添加测试验证本修复。
+不应删除并重写「停车缴费」整表数据行。改为按列原地更新——只操作「地点」列单元格，其他单元格完全不动。
 
-### 关键设计问题
-
-- `bridge.py` 第 305-323 行在读取既往文件地点映射时已经显式指定了 `sheet_name="停车缴费"`，说明代码中有显式读取指定 sheet 的先例。
-- `get_file_info()`（bridge.py 第 368 行）仅用于显示文件摘要信息（行数/列数），不是合并逻辑的一部分，按验收标准约束不在此次修复范围内。
+具体操作：
+1. `openpyxl.load_workbook(excel_path)` 完整加载工作簿（所有格式保留）
+2. 定位 `wb["停车缴费"]` sheet
+3. 按表头查找「地点」列索引；若不存在则新建列
+4. 对第 2 行起每行，**仅**更新「地点」单元格的值
+5. `extract_locations` 自身已保证已有非「无」值不被覆盖，原地写入不做额外覆盖
+6. 若新增「地点」列，将原黄色标记区域扩展到新列单元格
+7. 仅 `wb.save()`，其他 sheet 和单元格不受任何影响
 
 ## 预计变更的文件
 
 | 文件 | 变更类型 | 说明 |
 |------|----------|------|
-| `scripts/app_merge.py` | 修改 — 1 行 | `pd.read_excel` 增加 `sheet_name="财付通交易汇总"` + ValueError 处理 |
-| `scripts/webui/bridge.py` | 修改 — 2 行 | 合并路径的 `pd.read_excel` 增加 `sheet_name` 参数 + 精确错误提示 |
-| `tests/test_merge_reader.py` | 新增 | 测试主工作表不在第一个位置的读取行为 |
+| `scripts/webui/bridge.py` | 修改 | `re_extract_locations` 方法第 526-541 行改写为 openpyxl 按列原地更新 |
+| `tests/test_excel_format_preserve.py` | 新增 | 测试原地更新后格式保留、非地点列未被修改 |
+| `docs/IMPLEMENTATION_PLAN.md` | 修改 | 本计划 |
 | `docs/03_TASKS.md` | 修改 | 状态更新 |
+| `docs/CHANGE_REPORT.md` | 新增（实现完成后） | 变更报告 |
 
 ## 实现策略
 
-### 策略一：显式 sheet_name + 精确错误（代码修改）
+### Step 1：改写 `bridge.py:re_extract_locations()` 写回逻辑
 
-**`app_merge.py` 修改方案：**
-
-```python
-# 第 81-88 行，原代码：
-try:
-    df = pd.read_excel(filepath, dtype=str)
-    dfs.append(df)
-    logger.info(f"  → {len(df)} 行, {len(df.columns)} 列")
-except Exception as e:
-    logger.error(f"读取失败: {filepath} - {e}")
-    sys.exit(1)
-
-# 修改为：
-try:
-    df = pd.read_excel(filepath, sheet_name="财付通交易汇总", dtype=str)
-    dfs.append(df)
-    logger.info(f"  → {len(df)} 行, {len(df.columns)} 列")
-except ValueError as e:
-    if "not found" in str(e) or "not exist" in str(e):
-        logger.error(f"「财付通交易汇总」工作表不存在: {filepath}")
-        print(f"❌ 文件缺少必要工作表「财付通交易汇总」: {os.path.basename(filepath)}")
-    else:
-        logger.error(f"读取失败: {filepath} - {e}")
-    sys.exit(1)
-except Exception as e:
-    logger.error(f"读取失败: {filepath} - {e}")
-    sys.exit(1)
-```
-
-**`bridge.py` 修改方案：**
+将第 526-541 行的 pd.ExcelWriter 全重写替换为 openpyxl 按列原地更新：
 
 ```python
-# 第 292 行，原代码：
-df = pd.read_excel(f, dtype=str)
+# ── 5. 写回 Excel（原地更新，仅操作「停车缴费」sheet 的「地点」列）──
+import openpyxl
+from openpyxl.styles import PatternFill
+from openpyxl.utils import get_column_letter, column_index_from_string
+from core.writer import YELLOW_FILL
 
-# 修改为：
-try:
-    df = pd.read_excel(f, sheet_name="财付通交易汇总", dtype=str)
-except ValueError as e:
-    if "not found" in str(e):
-        progress.add_log(f"❌ 文件缺少必要工作表「财付通交易汇总」: {fname}")
-    else:
-        progress.add_log(f"❌ 读取失败: {fname} — {e}")
-    progress.fail += 1
-    continue
+_sanitize_for_excel(parking_df)
+wb = openpyxl.load_workbook(excel_path)
+ws = wb["停车缴费"]
+
+# 5a. 定位「地点」列索引 — 按表头名称查找
+LOCATION_COL_NAME = "地点"
+location_col_idx = None
+for cell in ws[1]:
+    if cell.value == LOCATION_COL_NAME:
+        location_col_idx = cell.column
+        break
+
+# 5b. 若「地点」列不存在，在停车缴费表最右侧新建
+if location_col_idx is None:
+    location_col_idx = (ws.max_column or 0) + 1
+    ws.cell(row=1, column=location_col_idx).value = LOCATION_COL_NAME
+
+# 5c. 逐行只更新「地点」单元格
+# parking_df 与 ws 的行对应关系：ws row=idx+2 ↔ parking_df index idx
+for df_idx in range(len(parking_df)):
+    excel_row = df_idx + 2  # 第1行是表头
+    loc_value = parking_df.iloc[df_idx][LOCATION_COL_NAME]
+    cell = ws.cell(row=excel_row, column=location_col_idx)
+    cell.value = None if pd.isna(loc_value) else loc_value
+
+# 5d. 若「地点」列为新建，将原黄色标记扩展到新列单元格
+#     （原黄色标记已在整行其他列存在，新列单元格需补色）
+yellow_mask = build_parking_yellow_mask(parking_df)
+yellow_indices = set(yellow_mask[yellow_mask].index) if yellow_mask is not None else set()
+for df_idx in yellow_indices:
+    excel_row = df_idx + 2
+    ws.cell(row=excel_row, column=location_col_idx).fill = YELLOW_FILL
+
+wb.save(excel_path)
+wb.close()
 ```
 
-注意检查 `continue` 之后的逻辑流是否安全（当前循环体内有 `progress.success += 1` 和后续操作，continue 将跳过这些）。
+要点：
+- **不删除行、不重写整表**：`ws.delete_rows()` 和 `df.to_excel()` 均不使用
+- **按列名精准定位**：按表头值找「地点」列，与列位置无关
+- **只有「地点」单元格被写入**：其他列、其他 sheet 完全不变
+- **已有非「无」地点值已由 extract_locations 保护**：该函数第 280-286 行已有 `already_set` 跳过逻辑
+- **边界处理**：若「地点」列尚不存在（旧版文件）则新建；新建时将原黄色标记行扩展到新列
 
-### 策略二：测试方案（test_merge_reader.py）
+### Step 2：确认 `extract_locations` 自身已保证不过覆盖
 
-新增测试文件 `tests/test_merge_reader.py`，使用 `pd.ExcelWriter` + `openpyxl` 构造具有多工作表的临时 Excel 文件，其中"财付通交易汇总"不在第一个位置，验证：
-- 读取时指定 sheet_name 能正确读取目标工作表数据
-- 文件缺少该工作表时 `pd.read_excel` 抛 `ValueError`
+验证 `core/location.py:extract_locations()` 第 277-286 行：
 
-测试用例如下：
-- `test_read_target_sheet_not_first`：构造多 sheet Excel，"财付通交易汇总"在第二个位置，验证能正确读取
-- `test_missing_target_sheet_raises`：构造不含目标 sheet 的 Excel，验证抛出 ValueError
+```python
+if "地点" not in df.columns:
+    df["地点"] = "无"
+
+already_set = (
+    df["地点"].notna() & (df["地点"] != "无") & (df["地点"] != "")
+)
+preserved_count = already_set.sum()
+```
+
+该逻辑在 API 调用前标记已有值，后续 `still_empty` 排除它们，再写入时不会覆盖。`re_extract_locations` 调用 `extract_locations` 已继承此保护。
+
+### Step 3：添加测试
+
+新增 `tests/test_excel_format_preserve.py`，测试原地更新后：
+
+1. **`test_other_sheet_format_preserved`**：多 sheet Excel 中，「财付通交易汇总」的隐藏列、冻结窗格、数据在 re-extract 后保持不变。
+
+2. **`test_only_location_column_modified`**（核心）：「停车缴费」sheet 中，原地更新后验证：
+   - 「地点」列的值已更新
+   - 其他列（如「车牌」「金额」「备注2」）的单元格值**完全不变**
+   - 已有非「无」地点值未被覆盖
+
+3. **`test_new_location_column_added`**（边界）：构造不含「地点」列的旧版停车缴费 sheet，验证新列表头和数据正确写入，其他列不变。
+
+4. **`test_missing_parking_sheet`**：文件不含「停车缴费」sheet 时返回 error JSON。
+
+5. **`test_yellow_fill_extended_to_new_column`**：当「地点」列为新建时，已有黄色标记的行在新列上也应有黄色填充。
 
 ## 架构影响
 
-无。仅修改两处 `pd.read_excel` 调用参数，不改变模块职责、不改变数据处理逻辑。
+无。输入输出签名不变，前端无感知。
 
 ## 风险评估
 
-| 风险 | 概率 | 影响 | 缓解措施 |
-|------|------|------|----------|
-| `bridge.py` 合并循环内 `continue` 跳过 `progress.success += 1` 逻辑 | 低 | 中 | 检查并确保 `continue` 前 progress 状态正确 |
-| 已有历史文件的"财付通交易汇总"工作表名称不一致 | 低 | 低 | 当前版本输出的文件名称一致，只影响超旧版本；不兼容时可回退 |
+| 风险 | 影响 | 缓解 |
+|------|------|------|
+| 表头名不是精确"地点"（如"地点1"） | 新建重复列 | 按表头精确匹配，`extract_locations` 返回的列名也是"地点" |
+| parking_df 行序与原 sheet 行序不一致 | 地点写到错误行 | `pd.read_excel` → `extract_locations` → 写回，索引对齐；原始文件也是从 `pd.read_excel` 读出的，行序一致 |
+| 原地修改中途崩溃导致文件损坏 | 文件不可用 | 保留现有 try/except，异常时返回 error JSON，不损坏原文件 |
+| 新建「地点」列后原黄色行新列无黄底 | 视觉不一致 | 步骤 5d 将黄色扩展到新列 |
 
 ## 测试策略
 
-- 新增 `tests/test_merge_reader.py`（集成测试，真正读写 Excel 文件）
-- 使用 `tempfile.TemporaryDirectory` 自动清理
-- 已存在的 35 个测试不变
+- 用 `pd.ExcelWriter` 构造含多 sheet + 格式的 Excel 文件作为 fixture
+- 用 openpyxl 原地更新 + 手动构造的 parking_df（模拟 extract_locations 输出）
+- 用 openpyxl 重新打开验证：其他 sheet 格式、本 sheet 非地点列数据、标黄状态
+- 不依赖 DeepSeek API
 
 ## 考虑的替代方案
 
-1. **从文件名推断 sheet 名称**：不可靠，放弃。
-2. **遍历 sheet 列表找到匹配名称**：`pd.read_excel` 本身已支持 `sheet_name` 参数，无需手动遍历。
-3. **保持读取第一个 sheet 但增加警告日志**：不符合验收标准"显式读取"要求。
+1. ~~删除行+全量重写~~：破坏行级样式，被否决。
+2. **按列原地更新（选定）**：只操作「地点」列单元格，最小侵入。
+3. 重写后格式化所有 sheet：仍需重写全表，且 col_width 被重新计算。
 
 ## 决策一致性
 
-- 符合 ADR-002（CLI 与 GUI 共享核心处理管道），两处修改行为一致。
-- 符合 ADR-004（自适应列名），这里不改变列识别，只改变工作表选取。
-- 符合约束"不改变输出工作表命名"。
+- 符合 ADR-003（Excel 为主要交付格式，修改时注意保留工作簿格式）
+- 符合架构约束「小规模变更、局部化变更」
 
 ## 预估范围
 
-| 维度 | 预估 |
-|------|------|
-| 修改文件 | 2 个 |
-| 新增文件 | 1 个（测试） |
-| 变更代码行 | ~15 行 |
-| 新增测试用例 | 2 个 |
+- 修改文件：1 个源文件（`bridge.py` 约 30 行替换）+ 1 个新增测试文件
+- 新增代码：约 90 行
