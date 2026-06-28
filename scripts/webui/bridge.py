@@ -21,11 +21,13 @@ from utils.logger import setup_logger as _setup_logger
 _setup_logger(log_dir=None)  # 控制台 handler，GUI 模式下不写文件
 
 from service.pipeline import TenpayPipeline, ProgressInfo, post_merge_analysis
+from service.config_service import get_parking_config as _get_parking_config
+from service.config_service import save_parking_config as _save_parking_config
+from service.config_service import get_time_period_config as _get_time_period_config
+from service.config_service import save_time_period_config as _save_time_period_config
+from service.reg_service import run_reg_process
 from core.merger import merge_dataframes, deduplicate
 from core.writer import write_excel
-from core.reg_reader import read_tenpay_reg_info
-from core.reg_processor import process_reg_data, build_person_info
-from core.writer import write_reg_excel
 import pandas as pd
 
 
@@ -146,7 +148,20 @@ class Api:
                 try:
                     # 前端在 status="done" 时停止轮询，必须保持 running 状态
                     self._pipeline.progress.status = "running"
-                    self._run_reg_process(source, output, timestamp)
+                    reg_result = run_reg_process(
+                        source, output, timestamp,
+                        progress_callback=lambda msg: self._pipeline.progress.add_log(msg),
+                    )
+                    if reg_result:
+                        p = self._pipeline.progress
+                        p.result["reg_output"] = reg_result["output"]
+                        p.result["reg_basic_rows"] = reg_result["basic_rows"]
+                        p.result["reg_changes_rows"] = reg_result["changes_rows"]
+                        p.result["reg_person_rows"] = reg_result["person_rows"]
+                        p.result["reg_files"] = reg_result["files"]
+                        p.result["reg_success"] = reg_result["success"]
+                        p.result["reg_fail"] = reg_result["fail"]
+                        p.result["reg_elapsed"] = reg_result["elapsed"]
                 except Exception as e:
                     import traceback
                     self._pipeline.progress.add_log(f"❌ 注册信息清洗异常: {e}")
@@ -160,92 +175,6 @@ class Api:
         self._thread = threading.Thread(target=_run, daemon=True)
         self._thread.start()
         return "started"
-
-    def _run_reg_process(self, source: str, output: str, timestamp: str = ""):
-        """在交易流水处理完成后，额外执行注册信息清洗（复用 progress 日志）。"""
-        import time
-        progress = self._pipeline.progress if self._pipeline else None
-
-        # 注册信息输出文件名
-        reg_name = f"TenpayRegInfo_merge_{timestamp}.xlsx" if timestamp else "TenpayRegInfo_merge.xlsx"
-
-        def _log(msg: str):
-            if progress:
-                progress.add_log(msg)
-            # 也走标准日志
-            import logging
-            logging.getLogger("TenpayMerge").info(msg)
-
-        _log("─" * 40)
-        _log("📋 开始清洗注册信息...")
-
-        # 1. 扫描 TenpayRegInfo.txt 文件
-        from utils.paths import find_files_by_name
-        reg_files = find_files_by_name(source, "TenpayRegInfo.txt")
-
-        if not reg_files:
-            _log("⚠️ 未找到 TenpayRegInfo.txt 文件，跳过注册信息清洗")
-            return
-
-        _log(f"扫描到 {len(reg_files)} 个 TenpayRegInfo.txt 文件")
-
-        t_start = time.time()
-
-        # 2. 逐文件解析
-        success = 0
-        fail = 0
-        skipped = 0
-        records = []
-
-        for i, filepath in enumerate(reg_files, 1):
-            try:
-                rel_path = os.path.relpath(filepath, source)
-            except ValueError:
-                rel_path = filepath
-
-            try:
-                result = read_tenpay_reg_info(filepath)
-                if result is None:
-                    skipped += 1
-                else:
-                    records.append(result)
-                    success += 1
-            except Exception as e:
-                fail += 1
-                _log(f"[{i}/{len(reg_files)}] 失败: {rel_path} — {e}")
-
-        # 3. 清洗合并
-        basic_df, changes_df = process_reg_data(records)
-
-        # 4. 提取人员基础信息
-        person_df = build_person_info(basic_df)
-
-        # 5. 输出 Excel
-        output_path = os.path.join(output, reg_name)
-        result_path = write_reg_excel(basic_df, changes_df, output_path, person_df=person_df)
-
-        elapsed = time.time() - t_start
-
-        # 6. 日志摘要 + 写入 result 供前端展示
-        _log(f"✅ 注册信息清洗完成!")
-        _log(f"文件总数: {len(reg_files)} | 成功: {success} | 失败: {fail} | 跳过: {skipped}")
-        _log(f"注册信息汇总: {len(basic_df)} 条 | 变更记录: {len(changes_df)} 条 | 基础信息(自然人): {len(person_df)} 人")
-        _log(f"耗时: {elapsed:.1f} 秒")
-        if result_path:
-            _log(f"输出文件: {result_path}")
-        else:
-            _log("⚠️ 注册信息输出为空（无有效数据）")
-
-        # 写入 reg 结果供前端分别展示
-        if progress:
-            progress.result["reg_output"] = result_path or ""
-            progress.result["reg_basic_rows"] = len(basic_df)
-            progress.result["reg_changes_rows"] = len(changes_df)
-            progress.result["reg_person_rows"] = len(person_df)
-            progress.result["reg_files"] = len(reg_files)
-            progress.result["reg_success"] = success
-            progress.result["reg_fail"] = fail
-            progress.result["reg_elapsed"] = round(elapsed, 1)
 
     def get_batch_status(self) -> dict:
         """获取单批次处理进度"""
@@ -398,64 +327,19 @@ class Api:
 
     def get_parking_config(self) -> dict:
         """获取停车缴费识别配置"""
-        from core.parking import load_parking_config
-        try:
-            return load_parking_config()
-        except Exception as e:
-            return {"error": str(e)}
+        return _get_parking_config()
 
     def save_parking_config(self, config: dict) -> str:
         """保存停车缴费识别配置到 JSON 文件，返回 "ok" 或错误信息"""
-        import json
-
-        # 验证必填字段
-        required_fields = ["备注2关键词", "排除关键词", "对手侧账户名称关键词", "车牌省份简称"]
-        for field in required_fields:
-            if field not in config:
-                return f"缺少必填字段: {field}"
-            if not isinstance(config[field], list):
-                return f"字段 {field} 必须是数组"
-
-        try:
-            from utils.paths import get_user_config_dir
-            config_dir = get_user_config_dir()
-            os.makedirs(config_dir, exist_ok=True)
-            config_path = os.path.join(config_dir, "parking_config.json")
-            with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(config, f, ensure_ascii=False, indent=2)
-            return "ok"
-        except Exception as e:
-            return f"保存失败: {e}"
+        return _save_parking_config(config)
 
     def get_time_period_config(self) -> dict:
         """获取时段分类配置"""
-        from core.processor import load_time_period_config
-        try:
-            return load_time_period_config()
-        except Exception as e:
-            return {"error": str(e)}
+        return _get_time_period_config()
 
     def save_time_period_config(self, config: dict) -> str:
         """保存时段分类配置到 JSON 文件，返回 "ok" 或错误信息"""
-        import json
-
-        # 验证必填字段
-        if "时段" not in config or not isinstance(config["时段"], list):
-            return "缺少必填字段: 时段"
-        for period in config["时段"]:
-            if not all(k in period for k in ("name", "start", "end")):
-                return "每个时段必须包含 name, start, end"
-
-        try:
-            from utils.paths import get_user_config_dir
-            config_dir = get_user_config_dir()
-            os.makedirs(config_dir, exist_ok=True)
-            config_path = os.path.join(config_dir, "time_period_config.json")
-            with open(config_path, "w", encoding="utf-8") as f:
-                json.dump(config, f, ensure_ascii=False, indent=2)
-            return "ok"
-        except Exception as e:
-            return f"保存失败: {e}"
+        return _save_time_period_config(config)
 
     def re_extract_locations(self, excel_path: str, api_key: str) -> str:
         """
