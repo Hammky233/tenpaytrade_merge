@@ -134,31 +134,39 @@ CLI 和 GUI 共享 `scripts/service/pipeline.py`、`scripts/core/` 和 `scripts/
 - API 失败不得中断主清洗结果输出。
 - 网络调用错误需要向用户提供可理解的信息。
 
-## ADR-006 GUI 前端本地化，不依赖 CDN
+## ADR-006 GUI 前端本地预编译构建，不依赖 CDN
 
 背景：
 
-项目运行环境可能无法稳定访问外部 CDN。
+项目运行环境可能无法稳定访问外部 CDN。此前使用 Babel Standalone 在运行时编译 JSX。
+T010 评估后决定改为 esbuild 构建时预编译，以消除 3 MB Babel 运行时的体积和启动成本。
 
 考虑的选项：
 
 - 从 CDN 加载 React/Babel。
-- 将前端依赖放入本地静态目录。
-- 引入完整前端构建和打包流程。
+- 将前端依赖放入本地静态目录，运行时 Babel 编译。
+- **选定的方案**：将前端依赖放入本地静态目录，esbuild 构建时预编译 JSX。
 
 选定的方案：
 
-当前阶段将 React/Babel 等前端依赖放入 `scripts/webui/static/` 本地加载。
+使用 esbuild 构建时预编译 JSX，`app.jsx`（JSX 源码）→ `static/app.js`（纯 JS）。
+构建产物提交到仓库，确保检出即运行。
 
 理由：
 
-- 离线可用。
-- 符合现有 pywebview 桌面 GUI 架构。
+- 离线可用（所有资源仍在本地 `static/` 内）。
+- 运行时移除 3 MB Babel Standalone 开销，缩小打包体积 ~3 MB。
+- 构建耗时 < 5ms，几乎不影响开发流程。
+- esbuild 是 Rust 编写的极速构建工具，无复杂配置。
 
 后果：
 
-- 运行时 Babel 会增加启动和解析成本。
-- 若后续引入预编译构建，需要更新本决策。
+- 引入 Node/esbuild 作为开发时构建工具（仅 devDependency，不进入打包）。
+- 运行时不依赖 Node/npm，浏览器直接加载 `static/app.js`。
+- PyInstaller 只包含构建产物（`static/` 内文件），不包含源码或构建工具。
+- 修改前端源码（`scripts/webui/app.jsx`）后需运行 `npm run build` 生成 `static/app.js`。
+- 可使用 `npm run watch` 在开发时自动重建。
+- 开发环境和 CI 需要 Node.js 来构建前端（已有 `package.json` 和 `node_modules/`）。
 
 ## ADR-007 地点 AI 识别配置使用 JSON 文件管理
 
