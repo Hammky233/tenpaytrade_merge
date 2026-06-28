@@ -159,3 +159,34 @@ CLI 和 GUI 共享 `scripts/service/pipeline.py`、`scripts/core/` 和 `scripts/
 
 - 运行时 Babel 会增加启动和解析成本。
 - 若后续引入预编译构建，需要更新本决策。
+
+## ADR-007 地点 AI 识别配置使用 JSON 文件管理
+
+背景：
+
+停车地点 AI 识别的模型名和运行参数在 `scripts/core/location.py` 中硬编码。DeepSeek 模型名随版本迭代变化（如 deepseek-chat、deepseek-reasoner），硬编码导致用户需修改代码才能更换模型。其他业务模块（parking、special_filter、mahjong）均已使用 `scripts/config/` 下的 JSON 文件管理参数。
+
+考虑的选项：
+
+- 维持硬编码常量。
+- 使用环境变量配置。
+- 新增 JSON 配置文件管理。
+
+选定的方案：
+
+新增 `scripts/config/location_config.json`，采用与其他业务模块一致的 JSON 文件管理模型名、并发参数和超时时间。
+
+配置加载沿用 `utils.config_loader.load_json_config()`，文件缺失时使用 `load_location_config()` 中提供的硬编码默认值。
+
+理由：
+
+- 与项目现有配置惯例一致（所有业务模块统一用 JSON 文件）。
+- 用户只需编辑 JSON 即可修改模型名，无需接触代码。
+- `load_json_config` 内置文件缺失降级，打包环境兼容。
+- 通过 PyInstaller `--collect-data` 可自然包含在打包产物中。
+
+后果：
+
+- `API_URL` 仍为硬编码（URL 变更场景远少于模型名，且纳入配置会增加敏感信息面）。
+- 用户误修改配置可能导致模型调用失败，但错误信息会被友好提示覆盖。
+- 新增配置文件需要打包说明同步更新。

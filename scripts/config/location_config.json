@@ -1,0 +1,6 @@
+{
+  "model": "deepseek-v4-pro",
+  "max_workers": 8,
+  "chunk_size": 100,
+  "request_timeout": 60
+}

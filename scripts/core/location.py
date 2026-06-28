@@ -30,10 +30,48 @@ logger = logging.getLogger("TenpayMerge")
 # ============================================================================
 
 API_URL = "https://api.deepseek.com/v1/chat/completions"
-MODEL = "deepseek-v4-pro"       # 硬编码，不可更改
-MAX_WORKERS = 8                 # 最大并发线程数
-CHUNK_SIZE = 100                # 每块最多 100 条去重备注（避免输出截断）
-REQUEST_TIMEOUT = 60            # 单次 API 请求超时（秒）
+
+# 以下参数通过 scripts/config/location_config.json 管理，
+# 文件缺失时使用 load_location_config() 中的硬编码默认值。
+# 模型名（如 deepseek-chat、deepseek-reasoner）可在配置文件中修改，
+# 无需改动代码。
+
+_config_cache = None
+
+
+def load_location_config(config_path: str | None = None) -> dict:
+    """
+    加载地点识别配置文件。
+
+    遵循其他业务模块（parking、special_filter）的配置加载惯例。
+    支持开发环境和 PyInstaller 打包环境。
+
+    Args:
+        config_path: 配置文件路径，默认 scripts/config/location_config.json
+
+    Returns:
+        配置字典，包含 model, max_workers, chunk_size, request_timeout
+    """
+    if config_path is not None:
+        with open(config_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    from utils.config_loader import load_json_config
+    return load_json_config("location_config", {
+        "model": "deepseek-v4-pro",
+        "max_workers": 8,
+        "chunk_size": 100,
+        "request_timeout": 60,
+    })
+
+
+def _get_config() -> dict:
+    """惰性加载配置，首次调用后缓存。"""
+    global _config_cache
+    if _config_cache is None:
+        _config_cache = load_location_config()
+    return _config_cache
+
 
 SYSTEM_PROMPT = (
     "你是地点提取助手。从停车缴费备注文本中提取地点名称"
@@ -100,23 +138,30 @@ SYSTEM_PROMPT = (
 # API 调用
 # ============================================================================
 
-def _call_deepseek(notes: list[str], api_key: str) -> list[str]:
+def _call_deepseek(notes: list[str], api_key: str,
+                   _urlopen=urllib.request.urlopen) -> list[str]:
     """
     调用 DeepSeek API，发送一批备注文本，返回等长地点数组。
 
     Args:
-        notes: 待提取的备注文本列表（长度 ≤ CHUNK_SIZE）
+        notes: 待提取的备注文本列表（长度 ≤ chunk_size）
         api_key: DeepSeek API Key
+        _urlopen: 可注入的 urlopen 函数（默认 urllib.request.urlopen），
+                  用于测试时模拟 HTTP 响应而不发起真实网络请求
 
     Returns:
         等长的地点名称列表（索引一一对应）
 
     Raises:
-        ValueError: API 返回无法解析
-        urllib.error.URLError: 网络错误
+        ValueError: API 返回无法解析 或 HTTP 错误
+        URLError: 网络错误
     """
     if not notes:
         return []
+
+    cfg = _get_config()
+    model_name = cfg["model"]
+    timeout = cfg["request_timeout"]
 
     # 构建请求
     user_message = (
@@ -126,7 +171,7 @@ def _call_deepseek(notes: list[str], api_key: str) -> list[str]:
     )
 
     payload = json.dumps({
-        "model": MODEL,
+        "model": model_name,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_message},
@@ -145,12 +190,30 @@ def _call_deepseek(notes: list[str], api_key: str) -> list[str]:
         method="POST",
     )
 
+    logger.info(f"DeepSeek API 请求: model={model_name}, notes={len(notes)} 条, "
+                f"timeout={timeout}s")
+
     try:
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+        with _urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", errors="replace") if e.fp else ""
-        raise ValueError(f"API 返回 HTTP {e.code}: {error_body[:500]}") from e
+        code = e.code
+        if code == 401:
+            msg = ("API Key 无效或已过期，请在设置中重新填入有效的 "
+                   "DeepSeek API Key")
+        elif code == 402:
+            msg = ("DeepSeek 账户余额不足，请前往 "
+                   "https://platform.deepseek.com 充值后重试")
+        elif code == 429:
+            msg = "请求频率超限（429），请稍后重试"
+        elif 500 <= code < 600:
+            msg = f"DeepSeek 服务器暂时不可用（HTTP {code}），请稍后重试"
+        else:
+            msg = f"API 请求失败（HTTP {code}）"
+        if error_body:
+            msg += f" — {error_body[:200]}"
+        raise ValueError(msg) from e
 
     # 解析响应 JSON
     try:
@@ -320,7 +383,11 @@ def extract_locations(
     # ── 5. 并发调用 DeepSeek API ──
     location_map: dict[str, str] = {}
 
-    if len(unique_notes) <= CHUNK_SIZE:
+    cfg = _get_config()
+    chunk_size = cfg["chunk_size"]
+    max_workers = cfg["max_workers"]
+
+    if len(unique_notes) <= chunk_size:
         # 单块，直接调用
         _log(f"调用 DeepSeek API ({len(unique_notes)} 条)...")
         try:
@@ -335,10 +402,10 @@ def extract_locations(
     else:
         # 分块并发
         chunks = []
-        for i in range(0, len(unique_notes), CHUNK_SIZE):
-            chunks.append(unique_notes[i:i + CHUNK_SIZE])
+        for i in range(0, len(unique_notes), chunk_size):
+            chunks.append(unique_notes[i:i + chunk_size])
 
-        n_workers = min(MAX_WORKERS, len(chunks))
+        n_workers = min(max_workers, len(chunks))
         _log(f"分 {len(chunks)} 块, {n_workers} 线程并发调用 DeepSeek API...")
 
         errors = 0
