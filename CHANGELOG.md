@@ -2,6 +2,60 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)。
 
+## 发布检查
+
+发版前请确认：
+
+1. 更新 `scripts/version.py` 中的 `VERSION` 为新版本号
+2. 全局搜索 `v\d+\.\d+`，更新所有静态显示文本中的版本号
+3. 为本版本新增 CHANGELOG 条目，记录新增/变更/修复
+4. 运行版本一致性检查：
+   ```powershell
+   $v = (Select-String -Path scripts/version.py -Pattern 'VERSION = "(\d+\.\d+)"').Matches.Groups[1].Value
+   Select-String -Path README.md -Pattern "v$v" -Quiet
+   Select-String -Path scripts/webui/static/index.html -Pattern "v$v" -Quiet
+   Select-String -Path CHANGELOG.md -Pattern "\[$v\]" -Quiet
+   ```
+   所有输出为 `True` 即通过。
+5. 确认 `git diff --check` 无空白错误
+
+---
+
+## [4.3] — 2026-06-17
+
+### 新增
+- **停车缴费地点识别（AI）**：调用 DeepSeek API 从停车备注文本中提取停车场/商场/小区名称
+  - 7 种常见备注格式 × 30+ few-shot 示例，覆盖国内停车场景
+  - 去重后分块并发（≤100 条/块，8 线程），数百条备注 10 秒内完成
+  - 已有非"无"地点值保留不覆盖（保护人工修正）
+  - 可选功能，API Key 通过 GUI 输入、内存存储，失败不影响主流程输出
+- **`scripts/core/location.py`**：DeepSeek 地点提取模块（仅 `urllib` 标准库，零新增外部依赖）
+- **GUI 地点识别**：复选框 + API Key 输入面板 + 事后重新提取按钮
+
+### 变更
+- 版本号 4.2 → 4.3
+
+---
+
+## [4.2] — 2026-06-14
+
+### 新增
+- **群红包识别**：检测同日同时向 ≥2 人发送微信红包的行为，统计对手方收款
+  - 新建 `scripts/core/group_red_packet.py`
+  - 输出「群红包记录」和「群红包-统计」两个 Excel sheet
+  - 集成到 `post_merge_analysis()` 共享分析管线（CLI 合并、GUI 合并、单批次三条路径一致）
+
+### 修正
+- **去重逻辑**：8 列联合主键（用户 ID + 交易单号 + 大单号 + 日期 + 时间 + 借贷类型 + 交易金额 + 对手方 ID）替代自适应降级策略
+  - 修复群红包场景误删：群发红包时多条记录的前 7 列完全相同，仅对手方/金额不同，旧逻辑会删剩 1 条
+
+### 变更
+- 群红包统计排序由金额倒序改为次数倒序
+- CLI/GUI/前端全路径展示制作人（`AUTHOR = "钟建成"`）
+- 版本号 4.1 → 4.2
+
+---
+
 ## [4.1] — 2026-06-11
 
 ### 新增
