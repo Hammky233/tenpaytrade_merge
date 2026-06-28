@@ -1,47 +1,90 @@
-# 变更报告 — T002
+# 变更报告 — T003
 
 ## 变更的文件
 
 | 文件 | 变更类型 |
 |------|----------|
-| `scripts/app_merge.py` | 修改 — 第 83 行增加 `sheet_name` 参数 + ValueError 处理 |
-| `scripts/webui/bridge.py` | 修改 — 第 292 行增加 `sheet_name` 参数；循环结束后增加 dfs 空检查提前退出 |
-| `tests/test_merge_reader.py` | 新增 — 4 个测试用例 |
-| `tests/test_compile.py` | 新增 — 编译检查，防止 GUI 入口语法错误漏检 |
+| `scripts/webui/bridge.py` | 修改 — `re_extract_locations` 写回逻辑从 pd.ExcelWriter 全重写改为 openpyxl 按列原地更新 |
+| `tests/test_excel_format_preserve.py` | 新增 — 6 个测试用例 |
 | `docs/CHANGE_REPORT.md` | 修改 — 本报告 |
 
 ## 变更摘要
 
-修复 CLI 和 GUI 多批次合并默认读取 Excel 第一个工作表的隐患，改为显式读取「财付通交易汇总」工作表。
+修复 GUI「重新提取地点」功能在写回 Excel 时因全表重写破坏所有工作表格式的问题，改为 openpyxl 按列原地更新——只操作「停车缴费」sheet 的「地点」列单元格。
 
 ### 具体修改
 
-**`scripts/app_merge.py`（CLI 入口）：**
-- `pd.read_excel(filepath, dtype=str)` → `pd.read_excel(filepath, sheet_name="财付通交易汇总", dtype=str)`
-- 新增 `except ValueError` 分支，专门捕获工作表不存在的场景，输出清晰中文错误信息后 `sys.exit(1)`
-- 原 `except Exception` 保留作为其他异常的兜底
+**`scripts/webui/bridge.py`（第 526-564 行）：**
 
-**`scripts/webui/bridge.py`（GUI 入口）：**
-- `pd.read_excel(f, dtype=str)` → `pd.read_excel(f, sheet_name="财付通交易汇总", dtype=str)`
-- 新增内层 `try/except ValueError`，文件缺少目标工作表时写入日志、`progress.fail += 1` 并 `continue` 跳过该文件
-- **读取循环结束后增加 dfs 空检查**：如果所有文件均缺少目标工作表，设置 `progress.status = "error"`、输出清晰中文错误后 `return` 提前退出，避免以空数据误报「合并完成」
+替换前（有缺陷）：
+```python
+# pd.ExcelWriter 创建新文件，丢弃所有已有格式
+with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
+    for sheet_name, sheet_df in all_sheets.items():
+        sheet_df.to_excel(writer, index=False, sheet_name=sheet_name)
+
+# 只恢复「停车缴费」一个 sheet 的格式
+_sanitize_for_excel(parking_df)
+wb = openpyxl.load_workbook(excel_path)
+if "停车缴费" in wb.sheetnames:
+    ws = wb["停车缴费"]
+    _format_worksheet(ws, parking_df)
+```
+
+替换后（原地修改）：
+```python
+_sanitize_for_excel(parking_df)
+wb = openpyxl.load_workbook(excel_path)
+ws = wb["停车缴费"]
+
+# 定位「地点」列索引（按表头名），不存在则新建
+location_col_idx = None
+for cell in ws[1]:
+    if cell.value == "地点":
+        location_col_idx = cell.column
+        break
+if location_col_idx is None:
+    location_col_idx = (ws.max_column or 0) + 1
+    ws.cell(row=1, column=location_col_idx).value = "地点"
+
+# 逐行只更新「地点」单元格的值
+for df_idx in range(len(parking_df)):
+    excel_row = df_idx + 2
+    loc_value = parking_df.iloc[df_idx]["地点"]
+    ws.cell(row=excel_row, column=location_col_idx).value = (
+        None if pd.isna(loc_value) else loc_value
+    )
+
+# 若新建列，将原黄色标记扩展到新列单元格
+yellow_mask = build_parking_yellow_mask(parking_df)
+if yellow_mask is not None:
+    yellow_indices = set(yellow_mask[yellow_mask].index)
+    for df_idx in yellow_indices:
+        ws.cell(row=df_idx + 2, column=location_col_idx).fill = YELLOW_FILL
+
+wb.save(excel_path)
+wb.close()
+```
+
+关键设计：
+- **不删除行、不重写整表**：`ws.delete_rows()` 和 `df.to_excel()` 均不使用
+- **仅「地点」列单元格被写入**：其他列、其他 sheet 完全不受影响
+- **按表头名称精准定位**：与列位置无关，只要表头名为"地点"即可
+- **新建列时扩展黄色标记**：原标黄行的新「地点」列单元格补上黄色填充
+- **已有非"无"地点值由 extract_locations 自身保护**，原地写入不做额外覆盖（只写 DataFrame 返回的值，extract_locations 已跳过已有值行）
 
 ### 新增测试
 
-**`tests/test_merge_reader.py`** — 4 个用例：
+**`tests/test_excel_format_preserve.py`** — 6 个用例：
 
 | 测试 | 场景 | 验证点 |
 |------|------|--------|
-| `test_read_target_sheet_not_first` | 目标 sheet 在第二个位置 | 数据读取正确，不是第一个 sheet 的数据 |
-| `test_missing_target_sheet_raises` | 文件缺少目标 sheet | `pd.read_excel` 抛出 `ValueError` |
-| `test_sheet_at_first_position` | 目标 sheet 在第一个位置 | 行为与修改前一致（回归） |
-| `test_all_files_missing_target_gets_empty` | 所有文件均缺少目标 sheet | dfs 为空列表，merge 结果为空 DataFrame，write 返回空字符串 |
-
-**`tests/test_compile.py`** — 1 个用例：
-
-| 测试 | 覆盖 |
-|------|------|
-| `test_all_scripts_compile` | `py_compile` 检查 `scripts/` 下所有 `.py` 文件无语法错误 |
+| `test_other_sheet_format_preserved` | 多 sheet Excel，其他 sheet 的隐藏列、冻结窗格 | 对比原地更新前后，格式和数据完全一致 |
+| `test_only_location_column_modified` | 「停车缴费」sheet 的非「地点」列 | 列如车牌、金额的单元格值完全不变 |
+| `test_new_location_column_added` | 旧版文件没有「地点」列 | 自动新建列，表头和数据正确写入 |
+| `test_missing_parking_sheet` | 文件不含「停车缴费」sheet | 返回格式正确的 error JSON |
+| `test_existing_locations_preserved` | 已有非"无"地点值 | 原地更新后不被覆盖 |
+| `test_yellow_fill_extended_to_new_column` | 新建「地点」列时原黄色行 | 新列单元格被正确标黄 |
 
 ## 已执行的测试
 
@@ -50,17 +93,17 @@ cd /d C:\CCProject\tenpaytrade_merge
 .\.venv\Scripts\python -m pytest tests/ -v
 ```
 
-结果：**40 passed** in 0.85s。
+结果：**46 passed** in 1.15s（新增 6 个，原有 40 个无回归）。
 
 ## 已知风险
 
-- `bridge.py` 中 progress.success/progress.fail 的计数逻辑：出错文件计入 fail，成功文件计入 success，总览计数与之前一致
-- 如果用户有极端旧版本文件（「财付通交易汇总」工作表名称不同），会触发错误提示，而非像之前那样静默读取第一个 sheet
-- `get_file_info()`（仅用于文件预览）与修改前行为一致，不指定 `sheet_name`
+- 若用户在「停车缴费」sheet 中有自定义的行高、单元格边框等局部格式，本次修改不会破坏它们（原地修改只写「地点」列的 `value` 和 `fill`，不动其他属性）
+- 当原文件不包含「地点」列时，新建列使用 Excel 默认列宽；用户可手动调整
+- `extract_locations` 的保护逻辑（已有非"无"值不覆盖）保持不变
 
 ## 经验教训
 
-1. `pd.read_excel` 的 `sheet_name` 参数在 `openpyxl` 引擎下找不到工作表时错误信息包含 `"not found"` 字串，但通过 `xlrd` 等其他引擎时格式可能不同——需要留意跨引擎兼容性。
-2. 两处修改（CLI 和 GUI）的模式不同：CLI 是收集阶段失败直接退出（`sys.exit(1)`），GUI 是跳过错误文件继续处理——这种差异是合理的，因为 GUI 是多文件批量处理，不应用一个文件的失败终止整个批次。
-3. GUI 全失败路径需要额外聚合检查：即使每个文件的错误都被逐个处理，仍需要在读取循环结束后检查是否有任何文件成功，否则空列表会一路传递到后续步骤，最终以空数据误报「合并完成」。
-4. 测试套件应增加编译检查（`py_compile`），避免 GUI 入口等不被其他测试导入的模块出现语法错误而漏检。使用 PowerShell 做文件内容替换时，`\n` 字面量和换行符容易混淆，操作后应通过编译验证确保文件有效。
+1. **`pd.ExcelWriter` 创建全新文件，不是原地修改**：即使只写入相同的 sheet 和数据，格式也会全部丢失。后续 `_format_worksheet` 只能恢复列级格式，无法恢复行级样式。
+2. **Excel 原地修改应精准操作目标单元格**：操作整表或整行（`delete_rows` + 重写）会破坏行级样式。正确的做法是按列名称定位目标列、只操作目标列单元格。
+3. **表头名称匹配比列位置更稳健**：`for cell in ws[1]` 遍历表头行找"地点"列，与列位置无关，对列顺序变化有容错。
+4. **黄色标记应该扩展到新增列**：`_format_worksheet` 在初始创建时对整行应用黄色填充，但新增列不在当时的工作表 schema 中，所以新建列需要手动补充黄色填充。

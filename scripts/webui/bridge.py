@@ -523,21 +523,46 @@ class Api:
 
             newly = after_count - before_count
 
-            # ── 5. 写回 Excel ──
-            all_sheets["停车缴费"] = parking_df
-
-            with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
-                for sheet_name, sheet_df in all_sheets.items():
-                    sheet_df.to_excel(writer, index=False, sheet_name=sheet_name)
-
-            # ── 6. 重开文件应用格式 ──
-            from core.writer import _format_worksheet, _sanitize_for_excel
+            # ── 5. 写回 Excel（原地更新，仅操作「停车缴费」sheet 的「地点」列）──
+            from core.writer import _sanitize_for_excel, YELLOW_FILL
+            from core.parking import build_parking_yellow_mask
             import openpyxl
+
             _sanitize_for_excel(parking_df)
             wb = openpyxl.load_workbook(excel_path)
-            if "停车缴费" in wb.sheetnames:
-                ws = wb["停车缴费"]
-                _format_worksheet(ws, parking_df)
+            ws = wb["停车缴费"]
+
+            # 5a. 定位「地点」列索引 — 按表头名称查找
+            location_col_idx = None
+            for cell in ws[1]:
+                if cell.value == "地点":
+                    location_col_idx = cell.column
+                    break
+
+            location_col_found = location_col_idx is not None
+
+            # 5b. 若「地点」列不存在，在表最右侧新建
+            if not location_col_found:
+                location_col_idx = (ws.max_column or 0) + 1
+                ws.cell(row=1, column=location_col_idx).value = "地点"
+
+            # 5c. 逐行只更新「地点」单元格的值（不修改 fill，保留原有格式）
+            for df_idx in range(len(parking_df)):
+                excel_row = df_idx + 2  # 第 1 行是表头
+                loc_value = parking_df.iloc[df_idx]["地点"]
+                cell = ws.cell(row=excel_row, column=location_col_idx)
+                cell.value = None if pd.isna(loc_value) else loc_value
+
+            # 5d. 仅当「地点」列为新建时，才将原黄色标记扩展到新列对应的单元格
+            #     已有列的原黄色标记已在初始创建时由 _format_worksheet 设置，不动
+            if not location_col_found:
+                yellow_mask = build_parking_yellow_mask(parking_df)
+                if yellow_mask is not None:
+                    yellow_indices = set(yellow_mask[yellow_mask].index)
+                    for df_idx in yellow_indices:
+                        excel_row = df_idx + 2
+                        ws.cell(row=excel_row, column=location_col_idx).fill = YELLOW_FILL
+
             wb.save(excel_path)
             wb.close()
 
