@@ -38,6 +38,28 @@ def get_config_dir() -> str:
     return os.path.join(get_scripts_dir(), 'config')
 
 
+def get_user_config_dir() -> str:
+    """
+    获取用户可写的配置持久化目录。
+
+    在 PyInstaller onefile 打包环境下，内置配置目录（_MEIPASS）是临时解压目录，
+    写入的配置在重启后会丢失。用户配置持久化到 %APPDATA%/tenpaytrade/config/。
+
+    开发环境下与 get_config_dir() 返回相同路径（scripts/config/），
+    行为完全向后兼容。
+
+    Returns:
+        用户可写配置目录的绝对路径
+    """
+    if getattr(sys, 'frozen', False):
+        # PyInstaller --onefile 打包：使用 Windows 标准应用数据目录
+        base = os.environ.get('APPDATA', os.path.expanduser('~'))
+        return os.path.join(base, 'tenpaytrade', 'config')
+    else:
+        # 开发环境：与内置配置目录一致
+        return get_config_dir()
+
+
 def find_files_by_name(source_dir: str, filename: str) -> list[str]:
     """
     递归扫描 source_dir 下所有文件名为 filename 的文件。

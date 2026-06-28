@@ -1,75 +1,64 @@
-# 变更报告 — T006
+# 变更报告 — T007
 
 ## 变更的文件
 
 | 文件 | 变更类型 |
 |------|----------|
-| `README.md` | 修改 — 标题版本号 v4.0→v4.3 + 功能列表补全 + 架构树补全 + 配置表补全 |
-| `CHANGELOG.md` | 修改 — 新增 v4.2、v4.3 条目 + 发布检查 checklist |
-| `scripts/webui/static/index.html` | 修改 — 标题版本号 v4.2→v4.3（静态显示文本同步） |
-| `docs/03_TASKS.md` | 修改 — T006 状态 → "已实施待审批" |
+| `scripts/utils/paths.py` | 修改 — 新增 `get_user_config_dir()` |
+| `scripts/utils/config_loader.py` | 修改 — 双层配置读取策略（用户优先 → 内置兜底） |
+| `scripts/webui/bridge.py` | 修改 — `save_parking_config` / `save_time_period_config` 写入用户配置目录 |
+| `tests/conftest.py` | 修改 — 新增 `temp_config_dirs` fixture |
+| `tests/test_paths.py` | 新增 — 路径工具测试（4 用例） |
+| `tests/test_config_loader.py` | 新增 — 双层配置加载测试（4 用例） |
+| `docs/02_DECISIONS.md` | 修改 — 新增 ADR-008 |
 | `docs/CHANGE_REPORT.md` | 新增 — 本报告 |
 
 ## 变更摘要
 
-将 README 版本号、静态显示文本和发布记录同步到 `scripts/version.py` 定义的当前版本 (v4.3)，并增加发布检查机制防止后续版本漂移。
+将打包环境下 GUI 配置持久化路径从 `_MEIPASS/scripts/config/`（临时目录，重启丢失）改为 `%APPDATA%/tenpaytrade/config/`（稳定持久目录），并实现用户配置优先、内置默认配置兜底的双层读取策略。
 
 ### 具体修改
 
-**版本号修复：**
-- `README.md` 标题：`v4.0` → `v4.3`（落后 3 期）
-- `index.html` 标题：`v4.2` → `v4.3`（落后 1 期）
+**paths.py — 新增 `get_user_config_dir()`：**
+- 开发环境：返回与 `get_config_dir()` 相同的 `scripts/config/`
+- PyInstaller 打包：返回 `%APPDATA%/tenpaytrade/config/`
+- APPDATA 不存在时 fallback 到 `os.path.expanduser('~')`
 
-**CHANGELOG 补充（内容经 git 提交哈希核验）：**
-- v4.3 (2026-06-17)：AI 地点识别、location.py 模块、GUI 地点面板
-- v4.2 (2026-06-14)：群红包识别、8 列联合主键去重修正、制作人展示、统计排序变更
-- 顶部新增「发布检查」checklist（5 条检查项）
+**config_loader.py — 双层读取策略：**
+- 读取顺序：用户配置目录 → 内置默认配置目录 → `defaults` 参数
+- 用户配置存在时优先返回，内置配置作为兜底
+- 用户配置 JSON 损坏时自动降级到内置配置
+- 开发环境下用户目录 == 内置目录，行为完全不变
 
-**README 内容同步：**
-- 功能列表追加：AI 地点提取、群红包识别、注册信息提取合并
-- 架构树 core/ 组补全：location.py、mahjong.py、group_red_packet.py、reg_reader.py、reg_processor.py
-- 架构树 utils/ 组补全：encoding.py、text_utils.py、time_utils.py
-- 配置表补全：location_config.json、mahjong_config.json
+**bridge.py — 保存路径修正：**
+- `save_parking_config()`：写入 `get_user_config_dir()`，保存前 `makedirs(exist_ok=True)`
+- `save_time_period_config()`：同上
 
-### 未变更的行为
-
-- `scripts/version.py` 未修改（已为正确版本 4.3）
-- 所有运行时代码未修改
-- 功能行为完全不变
+**ADR-008 — 新增技术决策：**
+- 记录配置持久化目录选择为 `%APPDATA%/tenpaytrade/config/`
+- 理由：Windows 标准应用数据目录、与 `_MEIPASS` 隔离、向后兼容
 
 ## 添加的测试
 
-不涉及业务测试。实施了版本一致性检查：
-
-```powershell
-# 从 version.py 提取版本 → 验证 README/index.html/CHANGELOG 一致
-$v = (Select-String -Path scripts/version.py -Pattern 'VERSION = "(\d+\.\d+)"').Matches.Groups[1].Value
-Select-String -Path README.md -Pattern "v$v" -Quiet           # → True
-Select-String -Path scripts/webui/static/index.html -Pattern "v$v" -Quiet  # → True
-Select-String -Path CHANGELOG.md -Pattern "\[$v\]" -Quiet      # → True
-git diff --check  # → 无空白问题（仅 CRLF 预期警告）
-```
+| 测试文件 | 用例 | 覆盖场景 |
+|----------|------|----------|
+| `test_paths.py` | 4 | 开发环境路径正确性、用户与内置目录一致、打包环境 APPDATA 路径、无 APPDATA fallback |
+| `test_config_loader.py` | 4 | 用户优先、内置兜底、全缺失返回 defaults、用户配置损坏降级 |
 
 ## 已执行的测试
 
-```powershell
-cd C:\CCProject\tenpaytrade_merge
-# 版本一致性检查（全部通过）
-$v = (Select-String -Path scripts/version.py -Pattern 'VERSION = "(\d+\.\d+)"').Matches.Groups[1].Value
-Select-String -Path README.md -Pattern "v$v" -Quiet           # True
-Select-String -Path scripts/webui/static/index.html -Pattern "v$v" -Quiet  # True
-Select-String -Path CHANGELOG.md -Pattern "\[$v\]" -Quiet      # True
-git diff --check                                              # 无空白问题
-# 全量业务测试无回归
-.\.venv\Scripts\python -m pytest tests/ -v
+```
+tests/ 全量回归：68 passed in 1.37s
+  新增 8 测试全部通过
+  现有 60 测试无回归
 ```
 
 ## 已知风险
 
-无。仅文档和静态显示文本变更，不改运行时代码。
+无。开发环境行为完全向后兼容（用户目录 == 内置目录），打包环境新增路径 fallback 机制。
 
 ## 经验教训
 
-1. **中文档和代码同步是隐性负担**：版本号分散在 README、index.html、CLI/GUI 多个位置，缺少同步机制就一定会漂移。本次在 CHANGELOG 中增加发布检查 checklist 有助于缓解，但最终需考虑自动化（如 CI PR 检查）。
-2. **发布记录应按提交还原**：从 `git log --oneline` 和 `git show --stat` 还原变更内容比凭记忆准确可靠。本次通过提交哈希核验避免了将未发版内容（T004、mahjong）误写入 CHANGELOG。
-3. **CHANGELOG 是用户可见的交付物**，保持其准确性和完整性对用户信任很重要。缺失三期发布记录会让用户感觉项目维护不活跃。
+1. **配置持久化是桌面应用的隐式需求**：PyInstaller onefile 打包下 `_MEIPASS` 不可写，初期未考虑写入场景导致了配置丢失 bug。
+2. **双层读取比"安装时复制"更简单**：不需要首次运行的配置迁移逻辑，用户配置优先 + 内置兜底自然覆盖了所有场景。
+3. **`%APPDATA%` 是 Windows 桌面应用的合理持久化位置**：无需自行设计目录结构，遵循 OS 惯例即可。

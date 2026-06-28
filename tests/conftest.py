@@ -46,6 +46,29 @@ def sample_trades_df():
 
 
 @pytest.fixture
+def temp_config_dirs(tmp_path):
+    """创建临时用户配置目录和内置配置目录，并 patch get_user_config_dir / get_config_dir。"""
+    import utils.paths as paths_mod
+
+    user_dir = str(tmp_path / "user_config")
+    builtin_dir = str(tmp_path / "builtin_config")
+
+    # 保存原始函数
+    orig_user = paths_mod.get_user_config_dir
+    orig_builtin = paths_mod.get_config_dir
+
+    # 替换为临时目录
+    paths_mod.get_user_config_dir = lambda: user_dir
+    paths_mod.get_config_dir = lambda: builtin_dir
+
+    yield user_dir, builtin_dir
+
+    # 恢复
+    paths_mod.get_user_config_dir = orig_user
+    paths_mod.get_config_dir = orig_builtin
+
+
+@pytest.fixture
 def time_period_config():
     """默认时段配置字典。"""
     return {

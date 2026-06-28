@@ -190,3 +190,33 @@ CLI 和 GUI 共享 `scripts/service/pipeline.py`、`scripts/core/` 和 `scripts/
 - `API_URL` 仍为硬编码（URL 变更场景远少于模型名，且纳入配置会增加敏感信息面）。
 - 用户误修改配置可能导致模型调用失败，但错误信息会被友好提示覆盖。
 - 新增配置文件需要打包说明同步更新。
+
+## ADR-008 配置持久化目录使用 %APPDATA%/tenpaytrade
+
+背景：
+
+PyInstaller onefile 打包后，`sys._MEIPASS` 是指向临时解压目录。`get_config_dir()` 返回 `_MEIPASS/scripts/config/`，写入该目录的配置在重启后丢失。用户通过 GUI 修改的停车识别或时段分类配置无法持久化保存。
+
+考虑的选项：
+
+- 使用 `%APPDATA%/tenpaytrade/config/` 作为用户可写配置目录。
+- 保存在 exe 同目录（onefile 模式 exe 可能在只读位置）。
+- 保存在 `%LOCALAPPDATA%`（更适合缓存而非配置）。
+- 使用注册表（与项目纯文件架构不符）。
+
+选定的方案：
+
+使用 `%APPDATA%/tenpaytrade/config/` 作为用户可写配置目录，`scripts/config/` 仅作为内置默认配置目录。
+
+理由：
+
+- Windows 标准应用数据目录，用户始终有写权限。
+- 与 `_MEIPASS` 临时目录完全隔离，不受重启影响。
+- 开发环境下 `get_user_config_dir()` 返回与 `get_config_dir()` 相同的路径，行为完全向后兼容。
+- 读取策略：用户配置优先 → 内置默认配置兜底。
+
+后果：
+
+- 打包后首次运行时 `%APPDATA%/tenpaytrade/config/` 不存在，`load_json_config()` 静默降级到 `_MEIPASS/scripts/config/` 内置配置。
+- 用户通过 GUI 保存配置时自动创建该目录。
+- 所有配置 JSON 的业务字段含义不变。
