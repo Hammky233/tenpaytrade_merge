@@ -3,21 +3,17 @@
 
 - 自动检测编码（UTF-8 优先，fallback 到 GBK）
 - tab 分隔解析
-- 跳过空文件（≤ 1KB）
+- 跳过空文件
 - 跳过重复表头行
 - 处理列溢出（多余列合并到最后一列）
 """
 
-import os
 import logging
 import pandas as pd
 from utils.text_utils import normalize_row_parts
 from utils.encoding import detect_and_read_lines
 
 logger = logging.getLogger("TenpayMerge")
-
-# 最小有效文件大小（字节），小于此值视为空文件（仅含表头）
-MIN_FILE_SIZE = 1024  # 1KB
 
 
 def read_tenpay_trades(filepath: str) -> pd.DataFrame | None:
@@ -30,15 +26,6 @@ def read_tenpay_trades(filepath: str) -> pd.DataFrame | None:
     Returns:
         DataFrame 或 None（读取失败/空文件时）
     """
-    # 预检查：文件大小
-    try:
-        size = os.path.getsize(filepath)
-        if size <= MIN_FILE_SIZE:
-            logger.info(f"跳过空文件（{size}B）: ...{os.path.sep}{os.path.basename(os.path.dirname(filepath))}{os.path.sep}{os.path.basename(filepath)}")
-            return None
-    except OSError:
-        pass
-
     # 自动检测编码并读取
     content = detect_and_read_lines(filepath)
 

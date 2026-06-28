@@ -1,64 +1,53 @@
-# 变更报告 — T007
+# 变更报告 — T008
 
 ## 变更的文件
 
 | 文件 | 变更类型 |
 |------|----------|
-| `scripts/utils/paths.py` | 修改 — 新增 `get_user_config_dir()` |
-| `scripts/utils/config_loader.py` | 修改 — 双层配置读取策略（用户优先 → 内置兜底） |
-| `scripts/webui/bridge.py` | 修改 — `save_parking_config` / `save_time_period_config` 写入用户配置目录 |
-| `tests/conftest.py` | 修改 — 新增 `temp_config_dirs` fixture |
-| `tests/test_paths.py` | 新增 — 路径工具测试（4 用例） |
-| `tests/test_config_loader.py` | 新增 — 双层配置加载测试（4 用例） |
-| `docs/02_DECISIONS.md` | 修改 — 新增 ADR-008 |
+| `scripts/core/reader.py` | 修改 — 移除 1KB 文件大小预检查 |
+| `tests/test_reader.py` | 新增 — 小样本读取测试（4 用例） |
+| `docs/IMPLEMENTATION_PLAN.md` | 修改 — 更新为 T008 计划 |
 | `docs/CHANGE_REPORT.md` | 新增 — 本报告 |
 
 ## 变更摘要
 
-将打包环境下 GUI 配置持久化路径从 `_MEIPASS/scripts/config/`（临时目录，重启丢失）改为 `%APPDATA%/tenpaytrade/config/`（稳定持久目录），并实现用户配置优先、内置默认配置兜底的双层读取策略。
+### 问题
 
-### 具体修改
+`read_tenpay_trades()` 在文件读取前执行文件大小预检查：`if size <= 1024: return None`。该阈值错误地将小于等于 1KB 但包含有效数据行的小样本交易文件判为空文件并跳过。
 
-**paths.py — 新增 `get_user_config_dir()`：**
-- 开发环境：返回与 `get_config_dir()` 相同的 `scripts/config/`
-- PyInstaller 打包：返回 `%APPDATA%/tenpaytrade/config/`
-- APPDATA 不存在时 fallback 到 `os.path.expanduser('~')`
+### 修复
 
-**config_loader.py — 双层读取策略：**
-- 读取顺序：用户配置目录 → 内置默认配置目录 → `defaults` 参数
-- 用户配置存在时优先返回，内置配置作为兜底
-- 用户配置 JSON 损坏时自动降级到内置配置
-- 开发环境下用户目录 == 内置目录，行为完全不变
+彻底移除 `reader.py` 中的文件大小预检查（`MIN_FILE_SIZE` 常量和对应的 `try/except OSError` 块），让文件是否为空的判断完全由内容解析逻辑决定。
 
-**bridge.py — 保存路径修正：**
-- `save_parking_config()`：写入 `get_user_config_dir()`，保存前 `makedirs(exist_ok=True)`
-- `save_time_period_config()`：同上
+### 为什么可以这么做
 
-**ADR-008 — 新增技术决策：**
-- 记录配置持久化目录选择为 `%APPDATA%/tenpaytrade/config/`
-- 理由：Windows 标准应用数据目录、与 `_MEIPASS` 隔离、向后兼容
+`read_tenpay_trades()` 在移除预检查后仍有以下安全网：
+1. `detect_and_read_lines()` 返回 `None` → 编码识别失败，返回 `None`
+2. `not content` → 文件完全为空，返回 `None`
+3. 跳过空行和重复表头行后 `data_rows` 为空 → 无有效数据行，返回 `None`
+
+因此，仅表头、空行或无有效数据行的文件仍然被正常跳过。与 `reg_reader.py` 采用一致的"由内容决定"策略。
 
 ## 添加的测试
 
 | 测试文件 | 用例 | 覆盖场景 |
 |----------|------|----------|
-| `test_paths.py` | 4 | 开发环境路径正确性、用户与内置目录一致、打包环境 APPDATA 路径、无 APPDATA fallback |
-| `test_config_loader.py` | 4 | 用户优先、内置兜底、全缺失返回 defaults、用户配置损坏降级 |
+| `test_reader.py` | 4 | 小样本有效文件读取、仅表头跳过、空文件跳过、仅空行跳过 |
 
 ## 已执行的测试
 
 ```
-tests/ 全量回归：68 passed in 1.37s
-  新增 8 测试全部通过
-  现有 60 测试无回归
+tests/ 全量回归：72 passed in 1.63s
+  新增 4 测试全部通过
+  现有 68 测试无回归
 ```
 
 ## 已知风险
 
-无。开发环境行为完全向后兼容（用户目录 == 内置目录），打包环境新增路径 fallback 机制。
+无。移除预检查后，0 字节文件和仅表头文件仍然被正常跳过。
 
 ## 经验教训
 
-1. **配置持久化是桌面应用的隐式需求**：PyInstaller onefile 打包下 `_MEIPASS` 不可写，初期未考虑写入场景导致了配置丢失 bug。
-2. **双层读取比"安装时复制"更简单**：不需要首次运行的配置迁移逻辑，用户配置优先 + 内置兜底自然覆盖了所有场景。
-3. **`%APPDATA%` 是 Windows 桌面应用的合理持久化位置**：无需自行设计目录结构，遵循 OS 惯例即可。
+1. **文件大小不是有效性的可靠指标**：一个 500 字节的 `TenpayTrades.txt` 完全可以包含 2 条有效交易记录，不应因大小阈值被跳过。
+2. **代码已有充分的防御性检查**：`detect_and_read_lines` 的空值检查、空行跳过、无数据行检查构成了完整的空文件处理链路，文件大小预检查提供的信息是冗余的。
+3. **同一代码库中的不一致**：`reg_reader.py` 使用 `size < 20`（20 字节）作为阈值而 `reader.py` 使用 1KB，这种不一致本身就是重构信号。
