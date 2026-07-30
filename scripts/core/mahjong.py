@@ -2,20 +2,21 @@
 疑似麻友识别模块
 
 功能：
-  detect_mahjong_records(df, config) → 识别潜在麻将朋友
+  detect_mahjong_records(df, config) → 识别潜在麻将朋友和固定交易圈子
   load_mahjong_config(config_path) → 加载配置文件
 
 识别规则（所有条件必须同时满足）：
-  1. 交易发生在晚上 20:00 ~ 次日 06:00（晚间+凌晨）
+  1. 交易发生在配置的疑似麻友分析时段内（默认 20:00 ~ 次日 02:00）
   2. "交易用途类型" == "转账"（精确匹配）
   3. "备注1" == "微信红包" 或 "微信转账"（精确匹配）
   4. "对手侧账户名称"为自然人（不含商户关键词）
-  5. 同一晚间 session 内，发送方与 2-10 个不同对手方交易
-  6. 同一对手方在 ≥2 个不同晚间出现 → 标记为"疑似麻友"
+  5. 同一晚间 session 内，发送方与配置范围内数量的不同对手方交易
+  6. 同一晚间 session 内至少配置数量的跨夜重复对手方共同出现
 
-输出两个 DataFrame:
-  - 交易明细：所有涉及疑似麻友的交易记录 + 辅助列（_对手方出现天数、_嫌疑等级）
-  - 统计汇总：嫌疑人、出现天数、交易笔数、涉及金额、最高单笔金额
+输出三个 DataFrame:
+  - 交易明细：疑似麻友交易记录 + 辅助列
+  - 对手方统计：按用户和对手方汇总
+  - 圈子统计：按用户和共同出现的核心对手方组合汇总
 """
 
 import logging
@@ -29,9 +30,32 @@ from utils.time_utils import time_to_minutes
 logger = logging.getLogger("TenpayMerge")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 配置加载
-# ══════════════════════════════════════════════════════════════════════════════
+def _default_mahjong_config() -> dict:
+    """返回疑似麻友识别默认配置。"""
+    return {
+        "商户排除关键词": [
+            "公司", "店", "商行", "超市", "便利店", "百货", "餐饮",
+            "酒楼", "饭店", "小吃", "奶茶", "咖啡", "烘焙", "蛋糕",
+            "酒店", "宾馆", "旅馆", "民宿", "物业", "管理处",
+            "药房", "医院", "诊所", "口腔", "美容", "美发",
+            "汽修", "洗车", "加油站", "驾校",
+            "培训", "教育", "学校", "幼儿园", "托管",
+            "KTV", "网吧", "酒吧", "会所",
+            "摊", "档", "铺", "行", "厂",
+            "科技", "贸易", "网络", "信息", "服务", "管理",
+            "有限", "责任", "合伙", "个体",
+            "政府", "局", "委", "办事处", "社区",
+        ],
+        "单晚最少对手方数": 2,
+        "单晚最多对手方数": 10,
+        "圈子最少对手方数": 2,
+        "最少出现天数": 2,
+        "分析开始时间": "20:00",
+        "分析结束时间": "02:00",
+        "备注1匹配": ["微信红包", "微信转账"],
+        "交易用途类型匹配": ["转账"],
+    }
+
 
 def load_mahjong_config(config_path: str | None = None) -> dict:
     """
@@ -49,288 +73,395 @@ def load_mahjong_config(config_path: str | None = None) -> dict:
             return json.load(f)
 
     from utils.config_loader import load_json_config
-    return load_json_config("mahjong_config", {
-        "商户排除关键词": [
-            "公司", "店", "商行", "超市", "便利店", "百货", "餐饮",
-            "酒楼", "饭店", "小吃", "奶茶", "咖啡", "烘焙", "蛋糕",
-            "酒店", "宾馆", "旅馆", "民宿", "物业", "管理处",
-            "药房", "医院", "诊所", "口腔", "美容", "美发",
-            "汽修", "洗车", "加油站", "驾校",
-            "培训", "教育", "学校", "幼儿园", "托管",
-            "KTV", "网吧", "酒吧", "会所",
-            "摊", "档", "铺", "行", "厂",
-            "科技", "贸易", "网络", "信息", "服务", "管理",
-            "有限", "责任", "合伙", "个体",
-            "政府", "局", "委", "办事处", "社区",
-        ],
-        "单晚最少对手方数": 2,
-        "单晚最多对手方数": 10,
-        "最少出现天数": 2,
-        "备注1匹配": ["微信红包", "微信转账"],
-        "交易用途类型匹配": ["转账"],
-    })
+    return load_json_config("mahjong_config", _default_mahjong_config())
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 内部工具函数
-# ══════════════════════════════════════════════════════════════════════════════
 
 def _get_suspect_level(day_count: int) -> str:
-    """根据出现天数返回嫌疑等级字符串。"""
+    """根据共同出现晚数返回嫌疑等级字符串。"""
     if day_count >= 5:
         return "高"
-    elif day_count >= 3:
+    if day_count >= 3:
         return "中"
-    else:
-        return "低"
+    return "低"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 核心识别函数
-# ══════════════════════════════════════════════════════════════════════════════
+def _time_window_mask(minutes: pd.Series, start_min: int, end_min: int) -> pd.Series:
+    """判断分钟数是否落入分析时段，支持跨日窗口。"""
+    valid = minutes >= 0
+    if start_min <= end_min:
+        return valid & (minutes >= start_min) & (minutes < end_min)
+    return valid & ((minutes >= start_min) | (minutes < end_min))
+
+
+def _normalize_int(value, default: int, min_value: int = 1) -> int:
+    """将配置值规范为整数，失败时使用默认值。"""
+    try:
+        parsed = int(value)
+        return parsed if parsed >= min_value else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _empty_result() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """返回空结果三元组。"""
+    return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
 
 def detect_mahjong_records(
     df: pd.DataFrame,
     config: dict | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """
     从去重后的交易流水中识别疑似麻友记录。
 
     算法流程:
-      1. 基础筛选（晚间时段 + 转账 + 微信红包/转账 + 自然人）
-      2. 计算 session_date（凌晨归前一日）
+      1. 基础筛选（分析时段 + 转账 + 微信红包/转账 + 自然人）
+      2. 计算 session_date（跨日窗口内的凌晨归前一日）
       3. 按 (用户, session_date) 分组，筛选满足对手方数量的 session
-      4. 跨日期统计对手方出现天数
-      5. 构建输出
+      4. 找出跨夜重复对手方，并保留有多个核心对手方共同出现的 session
+      5. 输出交易明细、对手方统计、圈子统计
 
     Args:
         df: 去重后的完整 DataFrame
         config: 配置字典，None 时自动加载
 
     Returns:
-        (suspect_tx_df, stats_df)
-        - suspect_tx_df: 涉及疑似麻友的全部交易记录（原始列 + _对手方出现天数 + _嫌疑等级）
-        - stats_df: 统计汇总表
-          列: 嫌疑人(对手侧账户名称), 关联用户, 出现天数, 交易笔数, 涉及总金额(元), 最高单笔金额(元)
+        (suspect_tx_df, stats_df, circle_stats_df)
     """
-    empty_pair = (pd.DataFrame(), pd.DataFrame())
-
     if df.empty:
-        return empty_pair
+        return _empty_result()
 
     if config is None:
         config = load_mahjong_config()
 
-    # ── 步骤 0: 自适应列名 ──
-    col_purpose = find_column(df.columns, ['交易', '用途', '类型'])
-    col_note1 = find_column(df.columns, ['备注1'])
-    col_opponent = find_column(df.columns, ['对手', '账户', '名称'])
-    col_user = find_column(df.columns, ['用户', '账号', '名称'])
-    # 回退：如果找不到用户侧账号名称，用用户ID
+    col_purpose = find_column(df.columns, ["交易", "用途", "类型"])
+    col_note1 = find_column(df.columns, ["备注1"])
+    col_opponent = find_column(df.columns, ["对手", "账户", "名称"])
+    col_user = find_column(df.columns, ["用户", "账号", "名称"])
     if col_user is None:
-        col_user = find_column(df.columns, ['用户ID'])
-    col_date = find_column(df.columns, ['日期'])
-    col_time = find_column(df.columns, ['时间'])
-    col_amount = find_column(df.columns, ['交易', '金额', '元'])
-    col_opponent_id = find_column(df.columns, ['对手方ID'])
+        col_user = find_column(df.columns, ["用户ID"])
+    col_date = find_column(df.columns, ["日期"])
+    col_time = find_column(df.columns, ["时间"])
+    col_amount = find_column(df.columns, ["交易", "金额", "元"])
+    col_opponent_id = find_column(df.columns, ["对手方ID"])
 
-    # 检查必要列
     required_cols = {
-        '交易用途类型': col_purpose,
-        '备注1': col_note1,
-        '对手侧账户名称': col_opponent,
-        '日期': col_date,
-        '时间': col_time,
+        "交易用途类型": col_purpose,
+        "备注1": col_note1,
+        "对手侧账户名称": col_opponent,
+        "日期": col_date,
+        "时间": col_time,
     }
     missing = [name for name, col in required_cols.items() if col is None]
     if missing:
         logger.warning(f"疑似麻友识别: 缺少必要列 {missing}，跳过")
-        return empty_pair
+        return _empty_result()
 
-    # ── 读取配置 ──
-    merchant_kw = config.get('商户排除关键词', [])
-    purpose_match = config.get('交易用途类型匹配', ['转账'])
-    note1_match = config.get('备注1匹配', ['微信红包', '微信转账'])
-    min_opponents = config.get('单晚最少对手方数', 2)
-    max_opponents = config.get('单晚最多对手方数', 10)
-    min_days = config.get('最少出现天数', 2)
+    merchant_kw = config.get("商户排除关键词", [])
+    purpose_match = config.get("交易用途类型匹配", ["转账"])
+    note1_match = config.get("备注1匹配", ["微信红包", "微信转账"])
+    min_opponents = _normalize_int(config.get("单晚最少对手方数", 2), 2)
+    max_opponents = _normalize_int(config.get("单晚最多对手方数", 10), 10)
+    min_circle_opponents = _normalize_int(config.get("圈子最少对手方数", 2), 2)
+    min_days = _normalize_int(config.get("最少出现天数", 2), 2)
+    if max_opponents < min_opponents:
+        max_opponents = min_opponents
 
-    # ── 步骤 1: 基础条件筛选（向量化）──
+    start_min = time_to_minutes(str(config.get("分析开始时间", "20:00")))
+    end_min = time_to_minutes(str(config.get("分析结束时间", "02:00")))
+    if start_min < 0 or end_min < 0 or start_min == end_min:
+        logger.warning("疑似麻友识别: 分析时段配置无效，使用默认 20:00-02:00")
+        start_min = time_to_minutes("20:00")
+        end_min = time_to_minutes("02:00")
+
     mask = pd.Series(True, index=df.index)
 
-    # 1.1 交易用途类型 == "转账"（精确匹配，用 isin 防空格干扰）
     purpose_series = df[col_purpose].astype(str).str.strip()
-    mask_purpose = purpose_series.isin(purpose_match)
-    mask = mask & mask_purpose
+    mask = mask & purpose_series.isin(purpose_match)
     logger.debug(f"疑似麻友 - 交易用途类型筛选后: {mask.sum()} / {len(df)}")
 
-    # 1.2 备注1 == "微信红包" 或 "微信转账"（精确匹配）
     note1_series = df[col_note1].astype(str).str.strip()
-    mask_note1 = note1_series.isin(note1_match)
-    mask = mask & mask_note1
+    mask = mask & note1_series.isin(note1_match)
     logger.debug(f"疑似麻友 - 备注1筛选后: {mask.sum()} / {len(df)}")
 
-    # 1.3 对手侧账户名称 不含商户关键词（自然人判断）
     opponent_series = df[col_opponent].astype(str)
     mask_natural = pd.Series(True, index=df.index)
     for kw in merchant_kw:
-        mask_natural = mask_natural & ~opponent_series.str.contains(kw, na=False)
+        mask_natural = mask_natural & ~opponent_series.str.contains(str(kw), na=False)
     mask = mask & mask_natural
     logger.debug(f"疑似麻友 - 自然人筛选后: {mask.sum()} / {len(df)}")
 
-    # 1.4 晚间时段过滤（时间 20:00 ~ 次日 06:00）
-    # 优先用"时段"列做快速预过滤
-    col_period = '时段' if '时段' in df.columns else None
-    if col_period:
-        mask_evening_quick = df[col_period].isin(['晚上', '凌晨'])
-        # 快速路径：时段列已排除早/中/下午，但晚上含19:00-20:00的1小时
-        # 仍需精确时间判断，但可以先用快速过滤减少计算
-        candidate_indices = df.index[mask & mask_evening_quick]
-    else:
-        candidate_indices = df.index[mask]
-
-    # 精确时间过滤：分钟数 >= 1200 (20:00) 或 < 360 (06:00)
+    candidate_indices = df.index[mask]
     time_minutes = df.loc[candidate_indices, col_time].apply(time_to_minutes)
-    valid_time = (time_minutes >= 1200) | ((time_minutes >= 0) & (time_minutes < 360))
-    valid_time_indices = valid_time[valid_time].index
-
-    # 合并时间过滤结果
+    valid_time = _time_window_mask(time_minutes, start_min, end_min)
     mask_time = pd.Series(False, index=df.index)
-    mask_time.loc[valid_time_indices] = True
+    mask_time.loc[valid_time[valid_time].index] = True
     mask = mask & mask_time
-    logger.debug(f"疑似麻友 - 时段筛选后: {mask.sum()} / {len(df)}")
+    logger.debug(f"疑似麻友 - 分析时段筛选后: {mask.sum()} / {len(df)}")
 
     if mask.sum() == 0:
         logger.info("疑似麻友识别: 无满足基础条件的交易记录")
-        return empty_pair
+        return _empty_result()
 
-    # ── 步骤 2: 计算 session_date ──
     df_candidate = df[mask].copy()
 
-    # 解析日期
-    date_parsed = pd.to_datetime(df_candidate[col_date], errors='coerce')
+    date_parsed = pd.to_datetime(df_candidate[col_date], errors="coerce")
     if date_parsed.isna().any():
         logger.warning(f"疑似麻友识别: {date_parsed.isna().sum()} 条日期解析失败，已排除")
         valid_date_mask = date_parsed.notna()
         df_candidate = df_candidate[valid_date_mask].copy()
         date_parsed = date_parsed[valid_date_mask]
         if df_candidate.empty:
-            return empty_pair
+            return _empty_result()
 
-    # 解析小时数（用于判断是否跨日）
-    hours = df_candidate[col_time].astype(str).str.extract(r'^(\d{1,2}):', expand=False)
-    hours = pd.to_numeric(hours, errors='coerce').fillna(-1).astype(int)
+    candidate_minutes = df_candidate[col_time].apply(time_to_minutes)
+    if start_min > end_min:
+        session_date = date_parsed.where(
+            candidate_minutes >= end_min,
+            date_parsed - pd.Timedelta(days=1),
+        )
+    else:
+        session_date = date_parsed
 
-    # 凌晨 (0-5点) → 归属前一日
-    session_date = date_parsed.where(hours >= 6, date_parsed - pd.Timedelta(days=1))
-
-    df_candidate['_session_date'] = session_date
+    df_candidate["_session_date"] = session_date
     user_col_actual = col_user if col_user else col_opponent
-    df_candidate['_user_name'] = df_candidate[user_col_actual].astype(str)
+    df_candidate["_user_name"] = df_candidate[user_col_actual].astype(str)
+    df_candidate["_session_key"] = (
+        df_candidate["_user_name"].astype(str)
+        + "|"
+        + df_candidate["_session_date"].dt.strftime("%Y-%m-%d")
+    )
 
-    # ── 步骤 3: 按 (用户, session_date) 分组，筛选有效晚间 session ──
-    session_groups = df_candidate.groupby(['_user_name', '_session_date'])
-
-    # 记录每个有效 session 的对手方集合
-    valid_sessions: list[tuple[str, pd.Timestamp, set[str]]] = []
-    for (user, s_date), group in session_groups:
+    valid_sessions: list[dict] = []
+    for (user, s_date), group in df_candidate.groupby(["_user_name", "_session_date"]):
         opponents = set(group[col_opponent].astype(str).unique())
         n_opponents = len(opponents)
         if min_opponents <= n_opponents <= max_opponents:
-            valid_sessions.append((str(user), s_date, opponents))
+            valid_sessions.append({
+                "user": str(user),
+                "date": s_date,
+                "session_key": f"{user}|{pd.Timestamp(s_date).strftime('%Y-%m-%d')}",
+                "opponents": opponents,
+            })
 
     if not valid_sessions:
-        logger.info("疑似麻友识别: 无满足对手方数量条件(2-10人)的晚间 session")
-        return empty_pair
+        logger.info(
+            f"疑似麻友识别: 无满足对手方数量条件({min_opponents}-{max_opponents}人)的晚间 session"
+        )
+        return _empty_result()
 
-    logger.debug(f"疑似麻友 - 有效晚间 session 数: {len(valid_sessions)}")
-
-    # ── 步骤 4: 跨日期统计对手方出现天数 ──
     pair_sessions: dict[tuple[str, str], set[pd.Timestamp]] = defaultdict(set)
-    for user, s_date, opponents in valid_sessions:
-        for opp in opponents:
-            pair_sessions[(user, opp)].add(s_date)
+    for session in valid_sessions:
+        for opp in session["opponents"]:
+            pair_sessions[(session["user"], opp)].add(session["date"])
 
-    # 筛选出现天数 >= min_days 的
-    suspects: dict[tuple[str, str], int] = {}
-    for (user, opp), dates in pair_sessions.items():
-        n_days = len(dates)
-        if n_days >= min_days:
-            suspects[(user, opp)] = n_days
-
-    if not suspects:
+    core_pairs: dict[tuple[str, str], int] = {
+        pair: len(dates)
+        for pair, dates in pair_sessions.items()
+        if len(dates) >= min_days
+    }
+    if not core_pairs:
         logger.info("疑似麻友识别: 无跨日期满足出现天数条件的对手方")
-        return empty_pair
+        return _empty_result()
+
+    suspect_sessions: dict[str, set[str]] = {}
+    for session in valid_sessions:
+        core_opponents = {
+            opp for opp in session["opponents"]
+            if (session["user"], opp) in core_pairs
+        }
+        if len(core_opponents) >= min_circle_opponents:
+            suspect_sessions[session["session_key"]] = core_opponents
+
+    if not suspect_sessions:
+        logger.info("疑似麻友识别: 无满足固定圈子条件的晚间 session")
+        return _empty_result()
+
+    pair_co_sessions: dict[tuple[str, str], set[str]] = defaultdict(set)
+    for session in valid_sessions:
+        session_key = session["session_key"]
+        if session_key not in suspect_sessions:
+            continue
+        for opp in suspect_sessions[session_key]:
+            pair_co_sessions[(session["user"], opp)].add(session_key)
+
+    suspects = {
+        pair: core_pairs[pair]
+        for pair, sessions in pair_co_sessions.items()
+        if len(sessions) >= min_days
+    }
+    if not suspects:
+        logger.info("疑似麻友识别: 无满足共同出现晚数条件的对手方")
+        return _empty_result()
 
     logger.info(f"疑似麻友 - 识别到 {len(suspects)} 对 (用户, 对手方) 疑似关系")
 
-    # ── 步骤 5: 构建输出 ──
-    # 收集嫌疑人对手方名称集合
-    suspect_opponents = {opp for (_, opp) in suspects}
-
-    # 从 df_candidate 中筛选涉及嫌疑人的交易
-    suspect_mask = df_candidate[col_opponent].astype(str).isin(suspect_opponents)
+    suspect_pairs = set(suspects.keys())
+    suspect_mask = (
+        df_candidate["_session_key"].isin(suspect_sessions.keys())
+        & df_candidate.apply(
+            lambda row: (str(row.get("_user_name", "")), str(row.get(col_opponent, ""))) in suspect_pairs,
+            axis=1,
+        )
+    )
     suspect_tx = df_candidate[suspect_mask].copy()
 
-    # 添加出现天数列
-    def _lookup_day_count(row):
-        user = str(row.get('_user_name', ''))
-        opp = str(row.get(col_opponent, ''))
+    def _lookup_day_count(row) -> int:
+        user = str(row.get("_user_name", ""))
+        opp = str(row.get(col_opponent, ""))
         return suspects.get((user, opp), 0)
 
-    suspect_tx['_对手方出现天数'] = suspect_tx.apply(_lookup_day_count, axis=1)
-    suspect_tx['_嫌疑等级'] = suspect_tx['_对手方出现天数'].apply(_get_suspect_level)
+    def _lookup_co_nights(row) -> int:
+        user = str(row.get("_user_name", ""))
+        opp = str(row.get(col_opponent, ""))
+        return len(pair_co_sessions.get((user, opp), set()))
 
-    # ── 步骤 6: 构建统计表 ──
-    stats_records = []
-    for (user, opp), day_count in sorted(suspects.items(), key=lambda x: -x[1]):
-        opp_tx = suspect_tx[
-            (suspect_tx[col_opponent].astype(str) == opp) &
-            (suspect_tx['_user_name'].astype(str) == user)
-        ]
-        if opp_tx.empty:
-            continue
+    suspect_tx["_对手方出现天数"] = suspect_tx.apply(_lookup_day_count, axis=1)
+    suspect_tx["_共同出现晚数"] = suspect_tx.apply(_lookup_co_nights, axis=1)
+    suspect_tx["_圈子对手方数"] = suspect_tx["_session_key"].map(
+        lambda key: len(suspect_sessions.get(str(key), set()))
+    )
+    suspect_tx["_嫌疑等级"] = suspect_tx["_共同出现晚数"].apply(_get_suspect_level)
 
-        total_amount = pd.to_numeric(opp_tx[col_amount], errors='coerce').sum()
-        max_amount = pd.to_numeric(opp_tx[col_amount], errors='coerce').max()
-        tx_count = len(opp_tx)
+    stats_df = _build_opponent_stats(
+        suspect_tx,
+        suspects,
+        pair_co_sessions,
+        col_opponent,
+        col_amount,
+        col_opponent_id,
+    )
+    circle_stats_df = _build_circle_stats(
+        suspect_tx,
+        suspect_sessions,
+        min_days,
+        col_opponent,
+        col_amount,
+    )
 
-        # 取对手方ID（同一对手方名称对应唯一ID，取第一个非空值）
-        opponent_id = ''
-        if col_opponent_id and col_opponent_id in opp_tx.columns:
-            id_series = opp_tx[col_opponent_id].astype(str).str.strip()
-            id_valid = id_series[id_series != '']
-            if not id_valid.empty:
-                opponent_id = id_valid.iloc[0]
-
-        stats_records.append({
-            '用户侧账号名称': user,
-            '对手方ID': opponent_id,
-            '对手侧账户名称': opp,
-            '出现天数': day_count,
-            '嫌疑等级': _get_suspect_level(day_count),
-            '交易笔数': tx_count,
-            '涉及总金额(元)': round(float(total_amount), 2) if pd.notna(total_amount) else 0.0,
-            '最高单笔金额(元)': round(float(max_amount), 2) if pd.notna(max_amount) else 0.0,
-        })
-
-    stats_df = pd.DataFrame(stats_records)
-
-    # ── 步骤 7: 清理输出列 ──
-    # 只保留原始列 + _对手方出现天数 + _嫌疑等级，移除内部中间列
     output_cols = []
-    for c in suspect_tx.columns:
-        if c in ('_对手方出现天数', '_嫌疑等级'):
-            output_cols.append(c)
-        elif c in df.columns:
-            output_cols.append(c)
-        # 跳过 _session_date, _user_name 等内部列
-
+    for col in suspect_tx.columns:
+        if col in ("_对手方出现天数", "_共同出现晚数", "_圈子对手方数", "_嫌疑等级"):
+            output_cols.append(col)
+        elif col in df.columns:
+            output_cols.append(col)
     suspect_tx = suspect_tx[output_cols]
 
     logger.info(
         f"疑似麻友识别完成: {len(stats_df)} 名嫌疑人, "
-        f"涉及 {len(suspect_tx)} 条交易记录"
+        f"{len(circle_stats_df)} 个疑似圈子, 涉及 {len(suspect_tx)} 条交易记录"
     )
 
-    return suspect_tx, stats_df
+    return suspect_tx, stats_df, circle_stats_df
+
+
+def _amount_series(df: pd.DataFrame, col_amount: str | None) -> pd.Series:
+    """读取金额列；金额只用于统计，不参与命中或排除。"""
+    if col_amount and col_amount in df.columns:
+        return pd.to_numeric(df[col_amount], errors="coerce").fillna(0)
+    return pd.Series(0.0, index=df.index)
+
+
+def _build_opponent_stats(
+    suspect_tx: pd.DataFrame,
+    suspects: dict[tuple[str, str], int],
+    pair_co_sessions: dict[tuple[str, str], set[str]],
+    col_opponent: str,
+    col_amount: str | None,
+    col_opponent_id: str | None,
+) -> pd.DataFrame:
+    """构建疑似麻友对手方统计表。"""
+    records = []
+    for (user, opp), day_count in suspects.items():
+        opp_tx = suspect_tx[
+            (suspect_tx[col_opponent].astype(str) == opp)
+            & (suspect_tx["_user_name"].astype(str) == user)
+        ]
+        if opp_tx.empty:
+            continue
+
+        amount = _amount_series(opp_tx, col_amount)
+        per_night_amount = opp_tx.assign(_amount=amount).groupby("_session_key")["_amount"].sum()
+        co_night_count = len(pair_co_sessions.get((user, opp), set()))
+
+        opponent_id = ""
+        if col_opponent_id and col_opponent_id in opp_tx.columns:
+            id_series = opp_tx[col_opponent_id].astype(str).str.strip()
+            id_valid = id_series[id_series != ""]
+            if not id_valid.empty:
+                opponent_id = id_valid.iloc[0]
+
+        total_amount = amount.sum()
+        max_amount = amount.max()
+        max_night_amount = per_night_amount.max() if not per_night_amount.empty else 0
+
+        records.append({
+            "用户侧账号名称": user,
+            "对手方ID": opponent_id,
+            "对手侧账户名称": opp,
+            "出现天数": day_count,
+            "共同出现晚数": co_night_count,
+            "嫌疑等级": _get_suspect_level(co_night_count),
+            "交易笔数": len(opp_tx),
+            "涉及总金额(元)": round(float(total_amount), 2),
+            "最高单笔金额(元)": round(float(max_amount), 2),
+            "单晚最高金额(元)": round(float(max_night_amount), 2),
+            "平均每晚金额(元)": round(float(total_amount) / co_night_count, 2) if co_night_count else 0.0,
+        })
+
+    stats_df = pd.DataFrame(records)
+    if stats_df.empty:
+        return stats_df
+    return stats_df.sort_values(
+        by=["共同出现晚数", "出现天数", "交易笔数", "涉及总金额(元)"],
+        ascending=[False, False, False, False],
+    ).reset_index(drop=True)
+
+
+def _build_circle_stats(
+    suspect_tx: pd.DataFrame,
+    suspect_sessions: dict[str, set[str]],
+    min_days: int,
+    col_opponent: str,
+    col_amount: str | None,
+) -> pd.DataFrame:
+    """构建疑似麻友圈子统计表。"""
+    circle_groups: dict[tuple[str, tuple[str, ...]], set[str]] = defaultdict(set)
+    for session_key, core_opponents in suspect_sessions.items():
+        user = session_key.split("|", 1)[0]
+        circle_groups[(user, tuple(sorted(core_opponents)))].add(session_key)
+
+    records = []
+    for (user, opponents_tuple), session_keys in circle_groups.items():
+        if len(session_keys) < min_days:
+            continue
+        circle_tx = suspect_tx[
+            (suspect_tx["_user_name"].astype(str) == user)
+            & suspect_tx["_session_key"].isin(session_keys)
+            & suspect_tx[col_opponent].astype(str).isin(opponents_tuple)
+        ]
+        if circle_tx.empty:
+            continue
+
+        amount = _amount_series(circle_tx, col_amount)
+        per_night_amount = circle_tx.assign(_amount=amount).groupby("_session_key")["_amount"].sum()
+        dates = sorted({key.split("|", 1)[1] for key in session_keys})
+
+        records.append({
+            "用户侧账号名称": user,
+            "圈子对手方数": len(opponents_tuple),
+            "核心对手方": "、".join(opponents_tuple),
+            "共同出现晚数": len(session_keys),
+            "交易笔数": len(circle_tx),
+            "涉及总金额(元)": round(float(amount.sum()), 2),
+            "单晚最高金额(元)": round(float(per_night_amount.max()), 2) if not per_night_amount.empty else 0.0,
+            "覆盖日期": "、".join(dates),
+        })
+
+    circle_stats_df = pd.DataFrame(records)
+    if circle_stats_df.empty:
+        return circle_stats_df
+    return circle_stats_df.sort_values(
+        by=["共同出现晚数", "圈子对手方数", "交易笔数", "涉及总金额(元)"],
+        ascending=[False, False, False, False],
+    ).reset_index(drop=True)

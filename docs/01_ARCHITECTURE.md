@@ -70,8 +70,8 @@
 - `processor.py`：清洗交易流水字段，包含列名清洗、重复列合并、金额转换、时间拆分、进出账拆分、时段分类和日期分类。
 - `merger.py`：合并 DataFrame 并执行联合主键去重。
 - `parking.py`：停车缴费识别、车牌提取和复核标记。
-- `special_filter.py`：特殊交易筛选。
-- `mahjong.py`：疑似麻友识别。
+- `special_filter.py`：特殊日期、金额、备注和对手侧账户名称的可配置特殊交易筛选及旧配置兼容。
+- `mahjong.py`：疑似麻友识别，基于独立分析时段和固定圈子共同出现规则输出明细、对手方统计、圈子统计。
 - `group_red_packet.py`：群红包识别。
 - `location.py`：停车地点 AI 提取。
 - `reg_reader.py`：读取注册信息。
@@ -104,6 +104,8 @@
 - `mahjong_config.json`
 
 配置用于调整规则参数，不应用于隐藏改变架构行为。打包环境下配置的读取和写入策略必须明确区分内置默认配置与用户可写配置。
+
+疑似麻友分析时段是 `mahjong_config.json` 的独立业务配置，不复用 `time_period_config.json` 的“时段”分类结果。
 
 ## 8. 输出边界
 

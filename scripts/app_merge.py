@@ -110,6 +110,7 @@ def main():
     special_df = analysis["special_df"]
     mahjong_df = analysis.get("mahjong_df")
     mahjong_stats_df = analysis.get("mahjong_stats_df")
+    mahjong_circle_stats_df = analysis.get("mahjong_circle_stats_df")
     grp_df = analysis.get("grp_df")
     grp_stats_df = analysis.get("grp_stats_df")
 
@@ -117,6 +118,7 @@ def main():
     write_excel(merged, args.output,
                 parking_df=parking_df, special_df=special_df,
                 mahjong_df=mahjong_df, mahjong_stats_df=mahjong_stats_df,
+                mahjong_circle_stats_df=mahjong_circle_stats_df,
                 grp_df=grp_df, grp_stats_df=grp_stats_df)
 
     elapsed = time.time() - start
@@ -130,7 +132,8 @@ def main():
     if parking_df is not None:
         print(f"  停车缴费:   {len(parking_df)} 条")
     if mahjong_stats_df is not None and len(mahjong_stats_df) > 0:
-        print(f"  疑似麻友:   {len(mahjong_stats_df)} 人, {len(mahjong_df)} 条记录")
+        circle_count = len(mahjong_circle_stats_df) if mahjong_circle_stats_df is not None else 0
+        print(f"  疑似麻友:   {len(mahjong_stats_df)} 人, {circle_count} 个圈子, {len(mahjong_df)} 条记录")
     if grp_stats_df is not None and len(grp_stats_df) > 0:
         print(f"  群红包:     {len(grp_df)} 条记录, {len(grp_stats_df)} 个对手方")
     print(f"  输出文件:   {args.output}")

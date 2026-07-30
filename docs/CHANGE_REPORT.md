@@ -1,87 +1,31 @@
-# 变更报告 — T010
-
-## 变更的文件
-
-| 文件 | 变更类型 | 说明 |
-|------|----------|------|
-| `docs/T010_EVALUATION.md` | **新增** | 详细评估报告（定量测量 + 定性分析 + 推荐方案） |
-| `docs/02_DECISIONS.md` | 修改 | ADR-006 从"运行时 Babel 本地化"更新为"esbuild 预编译构建" |
-| `docs/IMPLEMENTATION_PLAN.md` | 修改 | 更新为 T010 计划 |
-| `docs/03_TASKS.md` | 修改 | T010 状态 → 已实施待审批 |
-| `scripts/webui/app.jsx` | **新增** | JSX 源码文件（供 esbuild 构建用） |
-| `scripts/webui/static/app.js` | 修改 | 构建产物——esbuild 编译后的纯 JS（`--target=es2018 --minify-whitespace`） |
-| `scripts/webui/static/index.html` | 修改 | 移除 `babel.min.js` 加载，`<script>` 替代 `<script type="text/babel">` |
-| `scripts/webui/static/babel.min.js` | **删除** | 不再需要运行时编译（−3,069 KB） |
-| `scripts/webui/package.json` | 修改 | 移除 `@babel/standalone` 依赖，添加 esbuild devDependency + build/watch scripts |
-| `scripts/webui/package-lock.json` | 修改 | 自动更新：移除 `@babel/standalone`，添加 `esbuild` |
-| `docs/CHANGE_REPORT.md` | 新增 | 本报告 |
+# 变更报告 — T011 / T012
 
 ## 变更摘要
 
-### 评估结论
+本次合并交付 T011 与 T012：疑似麻友识别调整为可配置夜间固定圈子分析并新增圈子统计；特殊交易筛选新增 GUI 配置闭环，支持四类规则独立启停、编辑和持久化。
 
-采用 **esbuild 预编译构建**替代 Babel Standalone 运行时 JSX 编译。
+## 主要变更
 
-| 指标 | 改前（运行时 Babel） | 改后（esbuild 预编译） |
-|------|---------------------|----------------------|
-| `static/` 总大小 | **3,268 KB** | **198 KB（−94%）** |
-| `babel.min.js` | 3,069 KB | **0 KB（移除）** |
-| `app.js` | 51 KB（JSX 源码） | 38 KB（编译后纯 JS，空白压缩） |
-| 构建时间 | 无 | **4 ms**（`npm run build`） |
-| 启动开销 | 解析 3 MB + 编译 51 KB JSX | 仅加载执行 |
+- T011 疑似麻友：增加独立分析时段、固定圈子共同出现逻辑和“疑似麻友-圈子统计”工作表，金额仅用于统计。
+- 核心筛选：新增四类规则的独立开关、年度重复日期列表、对手侧账户名称规则和字面量文本匹配。
+- 配置兼容：旧版 `启用2月14日` 自动转换，新字段缺失时补齐当前默认日期和对手方规则；已保存的新结构配置保持用户选择。
+- 配置服务与 Bridge：新增 `get_special_filter_config()`、`save_special_filter_config()`，统一执行字段校验、日期规范化和持久化。
+- GUI：新增“💝 特殊交易”页签和四张规则卡片，支持启停、增删、前端校验、保存反馈及保存后重载。
+- 前端构建：已由 `app.jsx` 重新生成 `static/app.js`，页签栏增加横向滚动以适应新增入口。
+- 文档：同步更新需求、架构说明、任务、README 和 CHANGELOG。
 
-### 构建方案
+## 测试结果
 
-```json
-// package.json scripts
-"build": "esbuild app.jsx --outfile=static/app.js --target=es2018 --minify-whitespace",
-"watch": "esbuild app.jsx --outfile=static/app.js --target=es2018 --watch"
-```
+- `npm run build`：通过，生成 `static/app.js`。
+- `node --check scripts/webui/static/app.js`：通过。
+- 特殊交易与配置服务专项：`25 passed`。
+- 排除两个既有 Excel 句柄清理模块后的回归：`93 passed`。
+- 完整 pytest：业务断言执行完成，`93 passed`；另有 12 项在测试退出清理临时 Excel 时因 openpyxl 工作簿句柄未关闭触发 Windows `WinError 32`。失败集中在既有 `test_writer.py` 和 `test_excel_format_preserve.py`，与 T012 修改路径无关。
+- `git diff --check`：通过。
 
-### 文件边界
+## 兼容性与风险
 
-| 角色 | 文件 | 提交 | 入包 |
-|------|------|------|------|
-| JSX 源码 | `scripts/webui/app.jsx` | ✅ | ❌ |
-| 构建产物 | `scripts/webui/static/app.js` | ✅ | ✅ |
-| 构建工具 | `node_modules/` | ❌ | ❌ |
-
-### ADR-006 更新
-
-决策从"运行时 Babel 本地化"更新为"esbuild 构建时预编译，静态产物离线加载"，
-详细记录了引入构建步骤的后果和开发流程变更。
-
-## 添加的测试
-
-本任务为评估+构建化，不涉及 Python 业务逻辑变更。**无需新增测试。**
-
-现有 Python 端测试全部通过，代码零修改，无回归风险。
-
-## 已执行的测试
-
-```
-tests/ 全量回归：87 passed in 1.38s
-  - 所有 87 个现有测试全部通过
-  - Python 端代码零修改，无回归
-```
-
-### 功能验证
-
-- **依赖一致性验证**：`npm install` 移除 `@babel/standalone` + 新增 `esbuild`，package-lock.json 同步更新 ✅
-- **构建验证**：`npm run build`（esbuild app.jsx → static/app.js）成功，37.9 KB，4ms ✅
-- **JSX 编译验证**：产物中无 JSX 残留，`createElement` 正确生成 ✅
-- **兼容性验证**：`--target=es2018` 输出，Chromium ≥ 73 原生支持 ✅
-- **HTML 加载验证**：`<script src="app.js">` 替代 `<script type="text/babel">`，不再加载 `babel.min.js` ✅
-
-## 已知风险
-
-| 风险 | 级别 | 缓解措施 |
-|------|------|----------|
-| 修改 JSX 后忘记构建导致 `static/app.js` 过时 | 低 | 构建 < 5ms；`npm run watch` 自动重建；PR 审查时可检查一致性 |
-| 新检出仓库的用户没有 `node_modules/` 无法构建 | 低 | `static/app.js` 已提交，可直接运行 GUI。构建仅开发者需要 |
-
-## 经验教训
-
-1. **Babel Standalone 是最大的冗余依赖**：3 MB 文件占 static/ 的 94%，在 pywebview 本地加载场景下无任何收益。
-2. **esbuild 性能足够无感**：4ms 的构建时间让"引入构建步骤"的维护成本降到最低。
-3. **源码+产物双提交策略**：`app.jsx`（可读的 JSX 源码）和 `static/app.js`（可运行的纯 JS）均提交到仓库，兼顾可审查性和零构建运行。
+- 默认日期增加 `05-20`；备注2和对手侧账户名称预置桑拿、足浴、休闲、会所、按摩、养生、足疗、SPA、spa、温泉、酒店，对手侧账户名称规则默认启用。
+- 文本改为明确的字面量匹配，避免用户输入的点号等字符被解释成正则表达式。
+- 手工编辑的非法配置在核心层安全降级；GUI 保存入口会返回明确校验错误。
+- 当前工作区包含既有 T011 未提交改动，本任务采用增量合并，没有覆盖或回退这些内容。

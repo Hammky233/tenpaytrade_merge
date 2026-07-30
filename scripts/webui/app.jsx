@@ -31,8 +31,31 @@ function mockApi(method, ...args) {
         case 'get_batch_status': return {
             status: "idle", total: 0, current: 0, success: 0, fail: 0, skipped: 0, logs: [], result: {}
         };
-        case 'get_version': return "4.2";
+        case 'get_version': return "4.4";
         case 'get_author': return "";
+        case 'get_special_filter_config': return {
+            "启用特殊日期": true,
+            "特殊日期": ["02-14", "05-20"],
+            "启用特殊金额": true,
+            "金额模式": ["66.66", "88.88", "520", "1314"],
+            "启用特殊备注": true,
+            "备注关键词": ["快乐", "爱你", "恭喜", "谢谢", "桑拿", "足浴", "休闲", "会所", "按摩", "养生", "足疗", "SPA", "spa", "温泉", "酒店"],
+            "启用特殊对手方": true,
+            "对手侧账户名称关键词": ["桑拿", "足浴", "休闲", "会所", "按摩", "养生", "足疗", "SPA", "spa", "温泉", "酒店"],
+        };
+        case 'save_special_filter_config': return "ok";
+        case 'get_mahjong_config': return {
+            "商户排除关键词": ["公司", "店", "超市", "酒店", "科技"],
+            "单晚最少对手方数": 2,
+            "单晚最多对手方数": 10,
+            "圈子最少对手方数": 2,
+            "最少出现天数": 2,
+            "分析开始时间": "20:00",
+            "分析结束时间": "02:00",
+            "备注1匹配": ["微信红包", "微信转账"],
+            "交易用途类型匹配": ["转账"],
+        };
+        case 'save_mahjong_config': return "ok";
         default: return null;
     }
 }
@@ -1061,10 +1084,449 @@ function TimePeriodTab() {
     );
 }
 
+// --- 特殊交易配置 Tab ---
+function SpecialFilterConfigTab() {
+    const [config, setConfig] = useState(null);
+    const [inputs, setInputs] = useState({
+        "特殊日期": "",
+        "金额模式": "",
+        "备注关键词": "",
+        "对手侧账户名称关键词": "",
+    });
+    const [saveMsg, setSaveMsg] = useState("");
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => { loadConfig(); }, []);
+
+    async function loadConfig(showLoading = true) {
+        if (showLoading) setLoading(true);
+        try {
+            const cfg = await callApi('get_special_filter_config');
+            if (cfg && !cfg.error) {
+                setConfig(cfg);
+            } else {
+                setSaveMsg("加载配置失败: " + (cfg?.error || "未知错误"));
+            }
+        } catch (e) {
+            setSaveMsg("加载配置失败: " + (e.message || e));
+        }
+        if (showLoading) setLoading(false);
+    }
+
+    function normalizeDate(value) {
+        const match = value.trim().match(/^(\d{1,2})-(\d{1,2})$/);
+        if (!match) return null;
+        const month = Number(match[1]);
+        const day = Number(match[2]);
+        const date = new Date(2000, month - 1, day);
+        if (date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+        return `${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
+
+    function toggleRule(field) {
+        setConfig(prev => ({ ...prev, [field]: !prev[field] }));
+        setSaveMsg("");
+    }
+
+    function removeItem(field, index) {
+        setConfig(prev => ({
+            ...prev,
+            [field]: (prev[field] || []).filter((_, i) => i !== index),
+        }));
+        setSaveMsg("");
+    }
+
+    function addItem(field) {
+        let value = (inputs[field] || "").trim();
+        if (!value) return;
+        if (field === "特殊日期") {
+            value = normalizeDate(value);
+            if (!value) {
+                setSaveMsg("❌ 特殊日期格式无效，应为 M-D 或 MM-DD");
+                return;
+            }
+        }
+        if (field === "金额模式" && !/^\d+(?:\.\d{1,2})?$/.test(value)) {
+            setSaveMsg("❌ 金额模式仅支持数字和最多两位小数");
+            return;
+        }
+        if ((config[field] || []).includes(value)) {
+            setSaveMsg("❌ 该条目已存在");
+            return;
+        }
+        setConfig(prev => ({ ...prev, [field]: [...(prev[field] || []), value] }));
+        setInputs(prev => ({ ...prev, [field]: "" }));
+        setSaveMsg("");
+    }
+
+    function validateBeforeSave() {
+        const rules = [
+            ["启用特殊日期", "特殊日期"],
+            ["启用特殊金额", "金额模式"],
+            ["启用特殊备注", "备注关键词"],
+            ["启用特殊对手方", "对手侧账户名称关键词"],
+        ];
+        for (const [enabledField, listField] of rules) {
+            if (config[enabledField] && !(config[listField] || []).length) {
+                return `启用“${listField}”时至少需要一个条目`;
+            }
+        }
+        return "";
+    }
+
+    async function handleSave() {
+        const error = validateBeforeSave();
+        if (error) {
+            setSaveMsg("❌ " + error);
+            return;
+        }
+        const result = await callApi('save_special_filter_config', config);
+        if (result === "ok") {
+            await loadConfig(false);
+            setSaveMsg("✅ 配置已保存，后续处理将使用新规则");
+            setTimeout(() => setSaveMsg(""), 3000);
+        } else {
+            setSaveMsg("❌ " + result);
+        }
+    }
+
+    function RuleCard({ title, description, enabledField, listField, placeholder }) {
+        const values = config[listField] || [];
+        return (
+            <div className="card">
+                <div className="card-title" style={{display:"flex", justifyContent:"space-between", alignItems:"center", gap:12}}>
+                    <span>{title}</span>
+                    <label style={{fontSize:13, fontWeight:400, display:"flex", alignItems:"center", gap:6, cursor:"pointer"}}>
+                        <input type="checkbox" checked={!!config[enabledField]} onChange={() => toggleRule(enabledField)} />
+                        {config[enabledField] ? "已启用" : "已停用"}
+                    </label>
+                </div>
+                <div style={{fontSize:12, color:"var(--text-secondary)", marginBottom:12}}>{description}</div>
+                <div className="keyword-tags">
+                    {values.length === 0 ? (
+                        <span className="keyword-empty">暂无条目</span>
+                    ) : values.map((value, index) => (
+                        <span className="keyword-tag" key={`${listField}-${value}`}>
+                            {value}
+                            <span className="tag-remove" onClick={() => removeItem(listField, index)}>×</span>
+                        </span>
+                    ))}
+                </div>
+                <div className="keyword-input-row">
+                    <input
+                        className="form-input"
+                        value={inputs[listField] || ""}
+                        onChange={e => setInputs(prev => ({ ...prev, [listField]: e.target.value }))}
+                        onKeyDown={e => { if (e.key === "Enter") addItem(listField); }}
+                        placeholder={placeholder}
+                    />
+                    <button className="btn btn-primary btn-sm" onClick={() => addItem(listField)}>+ 添加</button>
+                </div>
+            </div>
+        );
+    }
+
+    if (loading) {
+        return <div className="card"><div style={{textAlign:"center", padding:40, color:"var(--text-secondary)"}}>加载中...</div></div>;
+    }
+    if (!config) {
+        return <div className="card"><div style={{textAlign:"center", padding:40, color:"var(--danger)"}}>{saveMsg || "加载配置失败"}</div></div>;
+    }
+
+    return (
+        <div>
+            <div className="card">
+                <div className="card-title">💝 特殊交易筛选逻辑</div>
+                <div className="logic-flow">
+                    <div className="flow-row"><span>以下四类规则中任意一类命中，即写入“特殊交易”工作表。</span></div>
+                    <div className="flow-row"><span style={{color:"var(--text-secondary)"}}>关闭规则不会删除已填写的条目，重新启用后可继续使用。</span></div>
+                </div>
+            </div>
+            <RuleCard title="📅 特殊日期" description="按每年重复的月日匹配，例如 02-14、05-20。" enabledField="启用特殊日期" listField="特殊日期" placeholder="输入 M-D 或 MM-DD，回车添加" />
+            <RuleCard title="💰 特殊金额" description="交易金额格式化为两位小数后，包含任一数字模式即命中。" enabledField="启用特殊金额" listField="金额模式" placeholder="输入 520、1314、66.66 等模式" />
+            <RuleCard title="📝 特殊备注" description="仅检查备注2，包含任一关键词即命中。" enabledField="启用特殊备注" listField="备注关键词" placeholder="输入备注2关键词，回车添加" />
+            <RuleCard title="🏦 对手侧账户名称" description="对手侧账户名称包含任一关键词即命中，默认启用，并预置桑拿、足浴、休闲、会所等关注关键词。" enabledField="启用特殊对手方" listField="对手侧账户名称关键词" placeholder="输入对手侧账户名称关键词" />
+            <div style={{textAlign:"center", marginBottom:16}}>
+                <button className="btn btn-primary btn-lg" onClick={handleSave}>💾 保存配置</button>
+                {saveMsg && (
+                    <div style={{marginTop:8, fontSize:13, color:saveMsg.startsWith("✅") ? "var(--success)" : "var(--danger)"}}>{saveMsg}</div>
+                )}
+            </div>
+        </div>
+    );
+}
+// --- 疑似麻友配置 Tab ---
+function MahjongConfigTab() {
+    const [config, setConfig] = useState(null);
+    const [saveMsg, setSaveMsg] = useState("");
+    const [loading, setLoading] = useState(true);
+    const [newMerchant, setNewMerchant] = useState("");
+    const [newNote, setNewNote] = useState("");
+
+    useEffect(() => {
+        loadConfig();
+    }, []);
+
+    async function loadConfig() {
+        setLoading(true);
+        try {
+            const cfg = await callApi('get_mahjong_config');
+            if (cfg && !cfg.error) {
+                setConfig(cfg);
+            } else {
+                setSaveMsg("加载配置失败: " + (cfg?.error || "未知错误"));
+            }
+        } catch (e) {
+            setSaveMsg("加载配置失败: " + (e.message || e));
+        }
+        setLoading(false);
+    }
+
+    function normColon(value) {
+        return value.replace(/：/g, ":");
+    }
+
+    function updateField(field, value) {
+        const normalized = field.includes("时间") ? normColon(value) : value;
+        setConfig(prev => ({ ...prev, [field]: normalized }));
+        setSaveMsg("");
+    }
+
+    function updateNumber(field, value) {
+        const parsed = parseInt(value, 10);
+        setConfig(prev => ({ ...prev, [field]: isNaN(parsed) ? "" : parsed }));
+        setSaveMsg("");
+    }
+
+    function addListItem(field, value, clearSetter) {
+        const v = value.trim();
+        if (!v) return;
+        if ((config[field] || []).includes(v)) return;
+        setConfig(prev => ({ ...prev, [field]: [...(prev[field] || []), v] }));
+        clearSetter("");
+        setSaveMsg("");
+    }
+
+    function removeListItem(field, index) {
+        setConfig(prev => ({ ...prev, [field]: (prev[field] || []).filter((_, i) => i !== index) }));
+        setSaveMsg("");
+    }
+
+    function validateBeforeSave() {
+        const startMin = parseTime(config["分析开始时间"]);
+        const endMin = parseTime(config["分析结束时间"]);
+        if (startMin < 0 || endMin < 0) return "时间格式应为 HH:MM";
+        if (startMin === endMin) return "开始时间和结束时间不能相同";
+        if (Number(config["单晚最多对手方数"]) < Number(config["单晚最少对手方数"])) {
+            return "单晚最多对手方数不能小于单晚最少对手方数";
+        }
+        return "";
+    }
+
+    async function handleSave() {
+        setSaveMsg("");
+        const err = validateBeforeSave();
+        if (err) {
+            setSaveMsg("❌ " + err);
+            return;
+        }
+        const result = await callApi('save_mahjong_config', config);
+        if (result === "ok") {
+            setSaveMsg("✅ 配置已保存");
+            setTimeout(() => setSaveMsg(""), 3000);
+        } else {
+            setSaveMsg("❌ " + result);
+        }
+    }
+
+    if (loading) {
+        return <div className="card"><div style={{textAlign:"center", padding:40, color:"var(--text-secondary)"}}>加载中...</div></div>;
+    }
+    if (!config) {
+        return <div className="card"><div style={{textAlign:"center", padding:40, color:"var(--danger)"}}>{saveMsg || "加载配置失败"}</div></div>;
+    }
+
+    const merchantKw = config["商户排除关键词"] || [];
+    const noteMatch = config["备注1匹配"] || [];
+    const purposeMatch = config["交易用途类型匹配"] || [];
+
+    return (
+        <div>
+            <div className="card">
+                <div className="card-title">🀄 疑似麻友识别逻辑</div>
+                <div className="logic-flow">
+                    <div className="flow-row">
+                        <span className="flow-label flow-label-include">基础筛选</span>
+                        <span>交易用途类型 = {purposeMatch.join(" / ")}</span>
+                        <span>备注1 = {noteMatch.join(" / ")}</span>
+                    </div>
+                    <div className="flow-indent">
+                        <div className="flow-row">
+                            <span className="flow-arrow">↓</span>
+                            <span>仅分析 {config["分析开始时间"]} ~ {config["分析结束时间"]} 的夜间交易，支持跨日</span>
+                        </div>
+                        <div className="flow-row">
+                            <span className="flow-arrow">↓</span>
+                            <span>同一晚满足 {config["单晚最少对手方数"]}-{config["单晚最多对手方数"]} 个自然人对手方</span>
+                        </div>
+                        <div className="flow-row">
+                            <span className="flow-arrow">↓</span>
+                            <span>至少 {config["圈子最少对手方数"]} 个跨夜重复对手方共同出现，且不少于 {config["最少出现天数"]} 晚</span>
+                        </div>
+                    </div>
+                    <div className="flow-row">
+                        <span className="flow-arrow" style={{marginLeft:20}}>→</span>
+                        <span className="flow-result">输出疑似麻友明细、对手方统计、圈子统计</span>
+                    </div>
+                    <div style={{borderTop:"1px solid var(--border)", margin:"10px 0"}}></div>
+                    <div className="flow-row">
+                        <span style={{color:"var(--text-secondary)"}}>金额不参与命中或排除，仅用于统计和排序。</span>
+                    </div>
+                </div>
+            </div>
+
+            <div className="card">
+                <div className="card-title">⏱️ 分析时段与重复阈值</div>
+                <div className="time-period-row">
+                    <span className="form-label">分析时段</span>
+                    <input
+                        className="form-input time-input"
+                        value={config["分析开始时间"] || ""}
+                        onChange={e => updateField("分析开始时间", e.target.value)}
+                        placeholder="20:00"
+                    />
+                    <span style={{width: 30, textAlign: "center", color: "var(--text-secondary)"}}>~</span>
+                    <input
+                        className="form-input time-input"
+                        value={config["分析结束时间"] || ""}
+                        onChange={e => updateField("分析结束时间", e.target.value)}
+                        placeholder="02:00"
+                    />
+                    <span style={{fontSize:12, color:"var(--text-secondary)"}}>结束时间小于开始时间时按跨日处理</span>
+                </div>
+                <div className="time-period-row">
+                    <span className="form-label">单晚人数</span>
+                    <input
+                        className="form-input time-input"
+                        type="number"
+                        min="1"
+                        value={config["单晚最少对手方数"] ?? ""}
+                        onChange={e => updateNumber("单晚最少对手方数", e.target.value)}
+                    />
+                    <span style={{width: 30, textAlign: "center", color: "var(--text-secondary)"}}>~</span>
+                    <input
+                        className="form-input time-input"
+                        type="number"
+                        min="1"
+                        value={config["单晚最多对手方数"] ?? ""}
+                        onChange={e => updateNumber("单晚最多对手方数", e.target.value)}
+                    />
+                    <span style={{fontSize:12, color:"var(--text-secondary)"}}>用于排除过少或过散的夜间交易</span>
+                </div>
+                <div className="time-period-row">
+                    <span className="form-label">固定圈子</span>
+                    <input
+                        className="form-input time-input"
+                        type="number"
+                        min="1"
+                        value={config["圈子最少对手方数"] ?? ""}
+                        onChange={e => updateNumber("圈子最少对手方数", e.target.value)}
+                    />
+                    <span style={{fontSize:12, color:"var(--text-secondary)"}}>个重复对手方共同出现</span>
+                    <input
+                        className="form-input time-input"
+                        type="number"
+                        min="1"
+                        value={config["最少出现天数"] ?? ""}
+                        onChange={e => updateNumber("最少出现天数", e.target.value)}
+                    />
+                    <span style={{fontSize:12, color:"var(--text-secondary)"}}>晚以上</span>
+                </div>
+            </div>
+
+            <div className="card">
+                <div className="card-title">
+                    <span className="flow-label flow-label-exclude" style={{marginRight:8}}>排除</span>
+                    商户/机构关键词
+                    <span style={{fontSize:12, color:"var(--text-secondary)", fontWeight:400, marginLeft:8}}>
+                        对手侧账户名称包含任一关键词则不视为自然人
+                    </span>
+                </div>
+                <div className="keyword-tags">
+                    {merchantKw.length === 0 ? (
+                        <span className="keyword-empty">暂无关键词</span>
+                    ) : (
+                        merchantKw.map((kw, i) => (
+                            <span className="keyword-tag" key={i}>
+                                {kw}
+                                <span className="tag-remove" onClick={() => removeListItem("商户排除关键词", i)}>×</span>
+                            </span>
+                        ))
+                    )}
+                </div>
+                <div className="keyword-input-row">
+                    <input
+                        className="form-input"
+                        value={newMerchant}
+                        onChange={e => setNewMerchant(e.target.value)}
+                        onKeyDown={e => { if (e.key === "Enter") addListItem("商户排除关键词", newMerchant, setNewMerchant); }}
+                        placeholder="输入商户/机构关键词，回车添加"
+                    />
+                    <button className="btn btn-primary btn-sm" onClick={() => addListItem("商户排除关键词", newMerchant, setNewMerchant)}>
+                        + 添加
+                    </button>
+                </div>
+            </div>
+
+            <div className="card">
+                <div className="card-title">
+                    <span className="flow-label flow-label-include" style={{marginRight:8}}>备注1</span>
+                    转账/红包备注匹配
+                </div>
+                <div className="keyword-tags">
+                    {noteMatch.map((kw, i) => (
+                        <span className="keyword-tag" key={i}>
+                            {kw}
+                            <span className="tag-remove" onClick={() => removeListItem("备注1匹配", i)}>×</span>
+                        </span>
+                    ))}
+                </div>
+                <div className="keyword-input-row">
+                    <input
+                        className="form-input"
+                        value={newNote}
+                        onChange={e => setNewNote(e.target.value)}
+                        onKeyDown={e => { if (e.key === "Enter") addListItem("备注1匹配", newNote, setNewNote); }}
+                        placeholder="输入备注1匹配值，回车添加"
+                    />
+                    <button className="btn btn-primary btn-sm" onClick={() => addListItem("备注1匹配", newNote, setNewNote)}>
+                        + 添加
+                    </button>
+                </div>
+            </div>
+
+            <div style={{textAlign: "center", marginBottom: 16}}>
+                <button className="btn btn-primary btn-lg" onClick={handleSave}>
+                    💾 保存配置
+                </button>
+                {saveMsg && (
+                    <div style={{
+                        marginTop: 8,
+                        fontSize: 13,
+                        color: saveMsg.startsWith("✅") ? "var(--success)" : "var(--danger)"
+                    }}>
+                        {saveMsg}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
 // ========== 根组件 ==========
 function App() {
     const [activeTab, setActiveTab] = useState("batch");
-    const [version, setVersion] = useState("4.2");  // 从 bridge 动态获取，失败时显示默认值
+    const [version, setVersion] = useState("4.4");  // 从 bridge 动态获取，失败时显示默认值
     const [author, setAuthor] = useState("");
 
     useEffect(() => {
@@ -1076,7 +1538,7 @@ function App() {
         <>
             <div className="header">
                 <h1>💳 财付通交易流水处理工具</h1>
-                <span className="version">v{version || "4.2"}{author ? ` · ${author}` : ""}</span>
+                <span className="version">v{version || "4.4"}{author ? ` · ${author}` : ""}</span>
             </div>
             <div className="tabs">
                 <div className={`tab ${activeTab === "batch" ? "active" : ""}`} onClick={() => setActiveTab("batch")}>
@@ -1088,6 +1550,12 @@ function App() {
                 <div className={`tab ${activeTab === "parking" ? "active" : ""}`} onClick={() => setActiveTab("parking")}>
                     ⚙️ 停车配置
                 </div>
+                <div className={`tab ${activeTab === "special" ? "active" : ""}`} onClick={() => setActiveTab("special")}>
+                    💝 特殊交易
+                </div>
+                <div className={`tab ${activeTab === "mahjong" ? "active" : ""}`} onClick={() => setActiveTab("mahjong")}>
+                    🀄 麻友配置
+                </div>
                 <div className={`tab ${activeTab === "timeperiod" ? "active" : ""}`} onClick={() => setActiveTab("timeperiod")}>
                     ⏰ 时段配置
                 </div>
@@ -1096,6 +1564,8 @@ function App() {
                 {activeTab === "batch" ? <BatchTab />
                  : activeTab === "merge" ? <MergeTab />
                  : activeTab === "parking" ? <ParkingConfigTab />
+                 : activeTab === "special" ? <SpecialFilterConfigTab />
+                 : activeTab === "mahjong" ? <MahjongConfigTab />
                  : <TimePeriodTab />}
             </div>
         </>

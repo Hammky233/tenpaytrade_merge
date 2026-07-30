@@ -36,6 +36,7 @@ def post_merge_analysis(merged, progress=None,
     Returns:
         {"parking_df": DataFrame|None, "special_df": DataFrame|None,
          "mahjong_df": DataFrame|None, "mahjong_stats_df": DataFrame|None,
+         "mahjong_circle_stats_df": DataFrame|None,
          "grp_df": DataFrame|None, "grp_stats_df": DataFrame|None}
     """
 
@@ -91,14 +92,15 @@ def post_merge_analysis(merged, progress=None,
     # --- 疑似麻友识别 ---
     mahjong_df = None
     mahjong_stats_df = None
+    mahjong_circle_stats_df = None
     try:
         from core.mahjong import load_mahjong_config, detect_mahjong_records
 
         mj_config = load_mahjong_config()
-        mahjong_df, mahjong_stats_df = detect_mahjong_records(merged, mj_config)
+        mahjong_df, mahjong_stats_df, mahjong_circle_stats_df = detect_mahjong_records(merged, mj_config)
         if not mahjong_df.empty:
             _log(f"🀄 识别到 {len(mahjong_stats_df)} 名疑似麻友, "
-                 f"涉及 {len(mahjong_df)} 条交易记录")
+                 f"{len(mahjong_circle_stats_df)} 个疑似圈子, 涉及 {len(mahjong_df)} 条交易记录")
         else:
             _log("未识别到疑似麻友记录")
     except Exception as e:
@@ -123,6 +125,7 @@ def post_merge_analysis(merged, progress=None,
 
     return {"parking_df": parking_df, "special_df": special_df,
             "mahjong_df": mahjong_df, "mahjong_stats_df": mahjong_stats_df,
+            "mahjong_circle_stats_df": mahjong_circle_stats_df,
             "grp_df": grp_df, "grp_stats_df": grp_stats_df}
 
 
@@ -281,6 +284,7 @@ class TenpayPipeline:
         special_df = analysis["special_df"]
         mahjong_df = analysis.get("mahjong_df")
         mahjong_stats_df = analysis.get("mahjong_stats_df")
+        mahjong_circle_stats_df = analysis.get("mahjong_circle_stats_df")
         grp_df = analysis.get("grp_df")
         grp_stats_df = analysis.get("grp_stats_df")
 
@@ -290,6 +294,7 @@ class TenpayPipeline:
             result_path = write_excel(merged, output_path,
                         parking_df=parking_df, special_df=special_df,
                         mahjong_df=mahjong_df, mahjong_stats_df=mahjong_stats_df,
+                        mahjong_circle_stats_df=mahjong_circle_stats_df,
                         grp_df=grp_df, grp_stats_df=grp_stats_df)
         except Exception as _we:
             import traceback
@@ -315,6 +320,7 @@ class TenpayPipeline:
             "parking_rows": len(parking_df) if parking_df is not None else 0,
             "mahjong_people": len(mahjong_stats_df) if mahjong_stats_df is not None else 0,
             "mahjong_rows": len(mahjong_df) if mahjong_df is not None else 0,
+            "mahjong_circles": len(mahjong_circle_stats_df) if mahjong_circle_stats_df is not None else 0,
             "grp_rows": len(grp_df) if grp_df is not None else 0,
             "grp_people": len(grp_stats_df) if grp_stats_df is not None else 0,
         }

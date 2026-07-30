@@ -1,4 +1,4 @@
-# 财付通交易流水处理工具 v4.3
+# 财付通交易流水处理工具 v4.4
 
 批量清洗财付通（Tenpay）交易流水数据。从目录树中读取 `TenpayTrades.txt`（UTF-8 + Tab 分隔），清洗转换后合并输出为一个 Excel 文件，支持多批次合并去重。
 
@@ -72,7 +72,8 @@ python scripts/gui_app.py
 | **群红包记录** | 同日同时多人微信红包聚类的明细 |
 | **群红包-统计** | 群红包对手方按收款次数/金额排序 |
 | **疑似麻友** | 疑似麻将/棋牌类交易明细（匹配时生成） |
-| **疑似麻友-统计** | 疑似麻友交易对手方统计（匹配时生成） |
+| **疑似麻友-统计** | 疑似麻友交易对手方统计，金额仅用于统计排序（匹配时生成） |
+| **疑似麻友-圈子统计** | 夜间固定交易圈子共同出现统计（匹配时生成） |
 
 ### 注册信息输出（`write_reg_excel`，单独文件）
 
@@ -90,9 +91,9 @@ python scripts/gui_app.py
 |------|------|
 | `scripts/config/parking_config.json` | 停车识别：关键词、排除词、车牌省份简称 |
 | `scripts/config/time_period_config.json` | 时段分类：时段名称、起止时间 |
-| `scripts/config/special_filter_config.json` | 特殊交易筛选：金额模式、备注关键词、2/14 开关 |
+| `scripts/config/special_filter_config.json` | 特殊交易筛选：年度重复日期、金额模式、备注关键词、对手侧账户名称关键词及独立开关 |
 | `scripts/config/location_config.json` | 地点识别 AI：模型名、并发数、超时 |
-| `scripts/config/mahjong_config.json` | 麻友识别：关键词、排除词 |
+| `scripts/config/mahjong_config.json` | 麻友识别：独立分析时段、固定圈子阈值、关键词、排除词 |
 
 可通过 GUI 配置面板修改，也可直接编辑 JSON 文件。
 

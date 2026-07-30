@@ -149,6 +149,7 @@ def write_excel(
     special_df: pd.DataFrame | None = None,
     mahjong_df: pd.DataFrame | None = None,
     mahjong_stats_df: pd.DataFrame | None = None,
+    mahjong_circle_stats_df: pd.DataFrame | None = None,
     grp_df: pd.DataFrame | None = None,
     grp_stats_df: pd.DataFrame | None = None,
 ) -> str:
@@ -163,6 +164,7 @@ def write_excel(
         special_df: 可选的特殊交易 DataFrame，写入独立工作表「特殊交易」
         mahjong_df: 可选的疑似麻友交易明细 DataFrame，写入独立工作表「疑似麻友」
         mahjong_stats_df: 可选的疑似麻友统计 DataFrame，写入独立工作表「疑似麻友-统计」
+        mahjong_circle_stats_df: 可选的疑似麻友圈子统计 DataFrame，写入独立工作表「疑似麻友-圈子统计」
         grp_df: 可选的群红包交易明细 DataFrame，写入独立工作表「群红包记录」
         grp_stats_df: 可选的群红包统计 DataFrame，写入独立工作表「群红包-统计」
 
@@ -180,7 +182,7 @@ def write_excel(
 
     # 清除 Excel 非法控制字符（否则 openpyxl 会抛 IllegalCharacterError）
     _sanitize_for_excel(df)
-    for extra_df in (parking_df, special_df, mahjong_df, mahjong_stats_df, grp_df, grp_stats_df):
+    for extra_df in (parking_df, special_df, mahjong_df, mahjong_stats_df, mahjong_circle_stats_df, grp_df, grp_stats_df):
         if extra_df is not None and not extra_df.empty:
             _sanitize_for_excel(extra_df)
 
@@ -210,6 +212,9 @@ def write_excel(
 
             # 写入疑似麻友统计表（独立 sheet）
             _write_extra_sheet(writer, mahjong_stats_df, "疑似麻友-统计", log_label="疑似麻友统计")
+
+            # 写入疑似麻友圈子统计表（独立 sheet）
+            _write_extra_sheet(writer, mahjong_circle_stats_df, "疑似麻友-圈子统计", log_label="疑似麻友圈子统计")
 
             # 写入群红包记录工作表
             _write_extra_sheet(writer, grp_df, "群红包记录", log_label="群红包记录")

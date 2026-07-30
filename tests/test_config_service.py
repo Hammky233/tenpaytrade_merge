@@ -177,3 +177,102 @@ class TestTimePeriodConfig:
         assert os.path.isfile(saved_path), (
             f"文件应写入 tmp_path: {saved_path}"
         )
+
+
+# ============================================================================
+# 特殊交易配置
+# ============================================================================
+
+
+_VALID_SPECIAL_CONFIG = {
+    "启用特殊日期": True,
+    "特殊日期": ["2-14", "02-14", "2-29"],
+    "启用特殊金额": True,
+    "金额模式": ["520", "66.66"],
+    "启用特殊备注": True,
+    "备注关键词": ["快乐"],
+    "启用特殊对手方": False,
+    "对手侧账户名称关键词": [],
+}
+
+
+class TestSpecialFilterConfig:
+    """特殊交易配置读写、校验和旧格式迁移测试。"""
+
+    def test_save_normalizes_and_reads_back(self, tmp_path, monkeypatch):
+        _mock_user_config_dir(tmp_path, monkeypatch)
+        from service.config_service import (
+            get_special_filter_config,
+            save_special_filter_config,
+        )
+
+        assert save_special_filter_config(_VALID_SPECIAL_CONFIG) == "ok"
+        loaded = get_special_filter_config()
+        assert loaded["特殊日期"] == ["02-14", "02-29"]
+        assert loaded["启用特殊对手方"] is False
+
+    @pytest.mark.parametrize(
+        "config, message",
+        [
+            (
+                dict(_VALID_SPECIAL_CONFIG, 特殊日期=[]),
+                "至少需要一个有效条目",
+            ),
+            (
+                dict(_VALID_SPECIAL_CONFIG, 特殊日期=["02-30"]),
+                "特殊日期格式无效",
+            ),
+            (
+                dict(_VALID_SPECIAL_CONFIG, 金额模式=["5.*"]),
+                "金额模式格式无效",
+            ),
+            (
+                dict(_VALID_SPECIAL_CONFIG, 启用特殊金额="true"),
+                "必须是布尔值",
+            ),
+        ],
+    )
+    def test_invalid_config_is_rejected(
+        self, tmp_path, monkeypatch, config, message
+    ):
+        _mock_user_config_dir(tmp_path, monkeypatch)
+        from service.config_service import save_special_filter_config
+
+        result = save_special_filter_config(config)
+        assert message in result
+        assert not os.path.exists(tmp_path / "special_filter_config.json")
+
+    def test_disabled_empty_rule_is_allowed(self, tmp_path, monkeypatch):
+        _mock_user_config_dir(tmp_path, monkeypatch)
+        from service.config_service import save_special_filter_config
+
+        config = dict(
+            _VALID_SPECIAL_CONFIG,
+            启用特殊日期=False,
+            特殊日期=[],
+        )
+        assert save_special_filter_config(config) == "ok"
+
+    def test_get_migrates_legacy_config(self, tmp_path, monkeypatch):
+        _mock_user_config_dir(tmp_path, monkeypatch)
+        import json
+
+        legacy = {
+            "金额模式": ["520"],
+            "备注关键词": [],
+            "启用2月14日": False,
+        }
+        with open(
+            tmp_path / "special_filter_config.json", "w", encoding="utf-8"
+        ) as file:
+            json.dump(legacy, file, ensure_ascii=False)
+
+        from service.config_service import get_special_filter_config
+
+        loaded = get_special_filter_config()
+        assert loaded["启用特殊日期"] is False
+        assert loaded["特殊日期"] == ["02-14", "05-20"]
+        assert loaded["启用特殊金额"] is True
+        assert loaded["启用特殊备注"] is False
+        assert loaded["启用特殊对手方"] is True
+        assert "足浴" in loaded["对手侧账户名称关键词"]

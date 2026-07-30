@@ -166,3 +166,26 @@ class TestWriteExcel:
             # 表头+1行数据
             assert ws.max_row == 2
             wb.close()
+
+    def test_mahjong_circle_stats_sheet_written(self):
+        """疑似麻友圈子统计工作表应正确写入。"""
+        main_df = pd.DataFrame({"用户ID": ["U001"]})
+        circle_df = pd.DataFrame({
+            "用户侧账号名称": ["用户甲"],
+            "核心对手方": ["张三、李四"],
+            "共同出现晚数": [2],
+        })
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "test_mahjong_circle.xlsx")
+            write_excel(
+                main_df,
+                path,
+                mahjong_circle_stats_df=circle_df,
+            )
+
+            wb = load_workbook(path)
+            assert "疑似麻友-圈子统计" in wb.sheetnames
+            ws = wb["疑似麻友-圈子统计"]
+            assert ws.max_row == 2
+            wb.close()

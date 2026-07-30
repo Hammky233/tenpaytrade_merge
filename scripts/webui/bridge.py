@@ -25,6 +25,10 @@ from service.config_service import get_parking_config as _get_parking_config
 from service.config_service import save_parking_config as _save_parking_config
 from service.config_service import get_time_period_config as _get_time_period_config
 from service.config_service import save_time_period_config as _save_time_period_config
+from service.config_service import get_special_filter_config as _get_special_filter_config
+from service.config_service import save_special_filter_config as _save_special_filter_config
+from service.config_service import get_mahjong_config as _get_mahjong_config
+from service.config_service import save_mahjong_config as _save_mahjong_config
 from service.reg_service import run_reg_process
 from core.merger import merge_dataframes, deduplicate
 from core.writer import write_excel
@@ -279,12 +283,14 @@ class Api:
                 special_df = analysis["special_df"]
                 mahjong_df = analysis.get("mahjong_df")
                 mahjong_stats_df = analysis.get("mahjong_stats_df")
+                mahjong_circle_stats_df = analysis.get("mahjong_circle_stats_df")
                 grp_df = analysis.get("grp_df")
                 grp_stats_df = analysis.get("grp_stats_df")
 
                 write_excel(merged, output,
                             parking_df=parking_df, special_df=special_df,
                             mahjong_df=mahjong_df, mahjong_stats_df=mahjong_stats_df,
+                            mahjong_circle_stats_df=mahjong_circle_stats_df,
                             grp_df=grp_df, grp_stats_df=grp_stats_df)
 
                 progress.status = "done"
@@ -340,6 +346,22 @@ class Api:
     def save_time_period_config(self, config: dict) -> str:
         """保存时段分类配置到 JSON 文件，返回 "ok" 或错误信息"""
         return _save_time_period_config(config)
+
+    def get_special_filter_config(self) -> dict:
+        """获取特殊交易筛选配置"""
+        return _get_special_filter_config()
+
+    def save_special_filter_config(self, config: dict) -> str:
+        """保存特殊交易筛选配置，返回 "ok" 或错误信息"""
+        return _save_special_filter_config(config)
+
+    def get_mahjong_config(self) -> dict:
+        """获取疑似麻友识别配置"""
+        return _get_mahjong_config()
+
+    def save_mahjong_config(self, config: dict) -> str:
+        """保存疑似麻友识别配置到 JSON 文件，返回 "ok" 或错误信息"""
+        return _save_mahjong_config(config)
 
     def re_extract_locations(self, excel_path: str, api_key: str) -> str:
         """
